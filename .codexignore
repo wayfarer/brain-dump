@@ -1,0 +1,14 @@
+# Block everything by default to save tokens
+*
+
+# Whitelist your development canvas and documentation
+!README.md
+!src/
+!src/**
+
+# Explicitly exclude massive dependency and compilation trees
+node_modules/
+.next/
+package-lock.json
+.git/
+
