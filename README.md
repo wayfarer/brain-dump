@@ -84,3 +84,11 @@ npm test       # Run the test suite (CLI unit + integration)
 ```
 
 Requires `OPENAI_API_KEY` in `.env` (see `.env.example`).
+
+### REPL commands
+
+During a session, lines starting with `/` are handled locally without calling the LLM:
+
+| Command | Description |
+|---|---|
+| `/search <query>` | Full-text search across all captured nodes. Prints matching nodes with their tag, memory date (if known), and a content preview. |
