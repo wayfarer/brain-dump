@@ -44,6 +44,16 @@ Human memory rarely surfaces with time-of-day precision. The granularity ladder 
 - `date` — "June 14, 1987"
 - `datetime` — reserved for imported synthetic data (logs, calendar entries, tooling exports). The interview pathway never produces `datetime` nodes.
 
+`memory_date_granularity: null` means no date information was captured for this node. `memory_date` will also be null in that case. The two fields are always null together.
+
+### Depth
+
+`depth` is stored at insert time by the caller. Nodes are append-only — `parent_id` never changes after insert — so the stored value cannot drift from the actual tree structure.
+
+### Segment vs. tag
+
+`segment` is the interview domain: coarse, configured before the session starts (e.g. `life_story`, `dream_journal`). `tag` is the thematic label the LLM assigns to a specific node: fine-grained and assigned per response (e.g. `"fierce belonging"`, `"quiet shame"`). Segment is the container; tag is the lens.
+
 ### Tags
 
 A tag is a short normalized label — `"sudden loss"`, `"fierce belonging"`, `"quiet shame"`. Tags drive aggregation: every appearance of a tag across all branches and all sessions forms a theme view. The chronology stays linear; tags are the lens through which it's queried.
@@ -52,9 +62,9 @@ The inverse query also matters: starting from a free-text phrase (`"grandmother"
 
 ## Storage
 
-Currently a single `dump.json` file loaded in full at session start. This does not scale.
+SQLite via `better-sqlite3` — single file (`dump.db`), no server, WAL mode. Indexed lookups on `id`, `parent_id`, `tag`, `captured_at`, and `segment`. FTS5 full-text search on `content`, kept in sync via insert/update/delete triggers.
 
-**Planned**: SQLite via `better-sqlite3` — single file, no server, indexed lookups on `id`, `parent_id`, `tag`, and `captured_at`, plus FTS5 full-text search on `content`. JSON remains the canonical **export/import** format. The storage backend is an implementation detail behind a serialization contract; the JSON shape is the user-facing surface.
+JSON is the canonical **export/import** format. `exportToJson` serializes the full database to a `DumpRecord` (version 2). `importFromJson` loads a v1 or v2 JSON record into SQLite — idempotent, runs in a transaction. On first startup, if a legacy `dump.json` is present and the database is empty, it is migrated automatically and renamed to `dump.json.migrated`.
 
 ## Layout
 

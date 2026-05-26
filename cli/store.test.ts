@@ -3,13 +3,16 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
   type Db,
+  type LegacyDumpRecord,
+  exportToJson,
   getNodeById,
   getNodeCount,
   getRecentNodes,
+  importFromJson,
   insertNode,
   openDb,
 } from "./store.js";
-import type { DumpNode } from "./types.js";
+import type { DumpNode, DumpRecord } from "./types.js";
 
 let db: Db;
 
@@ -157,5 +160,96 @@ describe("foreign key constraint on parent_id", () => {
     expect(() =>
       insertNode(db, makeNode({ id: "child", parentId: "parent", depth: 1 })),
     ).not.toThrow();
+  });
+});
+
+describe("exportToJson", () => {
+  it("returns version 2 with all nodes ordered by captured_at ASC", () => {
+    insertNode(db, makeNode({ id: "b", capturedAt: 2000 }));
+    insertNode(db, makeNode({ id: "a", capturedAt: 1000 }));
+    insertNode(db, makeNode({ id: "c", capturedAt: 3000 }));
+    const record = exportToJson(db);
+    expect(record.version).toBe(2);
+    expect(record.nodes.map((n) => n.id)).toEqual(["a", "b", "c"]);
+    expect(typeof record.exportedAt).toBe("number");
+  });
+
+  it("returns an empty nodes array for an empty db", () => {
+    const record = exportToJson(db);
+    expect(record.nodes).toHaveLength(0);
+  });
+});
+
+describe("importFromJson", () => {
+  it("imports a v2 record and returns the count of inserted nodes", () => {
+    const record: DumpRecord = {
+      version: 2,
+      exportedAt: Date.now(),
+      nodes: [makeNode({ id: "x1" }), makeNode({ id: "x2" })],
+    };
+    const count = importFromJson(db, record);
+    expect(count).toBe(2);
+    expect(getNodeCount(db)).toBe(2);
+  });
+
+  it("round-trips a v2 record through export then import", () => {
+    const node = makeNode({
+      id: "rt",
+      tag: "sudden loss",
+      content: "the empty chair",
+      capturedAt: 9999,
+      memoryDate: "1992",
+      memoryDateGranularity: "year",
+    });
+    insertNode(db, node);
+    const exported = exportToJson(db);
+
+    const db2 = openDb(":memory:");
+    importFromJson(db2, exported);
+    expect(getNodeById(db2, "rt")).toEqual(node);
+    db2.close();
+  });
+
+  it("is idempotent — re-importing the same record does not duplicate nodes", () => {
+    const record: DumpRecord = {
+      version: 2,
+      exportedAt: Date.now(),
+      nodes: [makeNode({ id: "dup" })],
+    };
+    importFromJson(db, record);
+    const count = importFromJson(db, record);
+    expect(count).toBe(0);
+    expect(getNodeCount(db)).toBe(1);
+  });
+
+  it("imports a v1 record, maps timestamp → capturedAt, and defaults segment to life_story", () => {
+    const legacy: LegacyDumpRecord = {
+      version: 1,
+      createdAt: 1000,
+      updatedAt: 2000,
+      nodes: [
+        { id: "v1-node", timestamp: 5555, tag: "fierce belonging", content: "the table", depth: 0, parentId: null },
+      ],
+    };
+    importFromJson(db, legacy);
+    const node = getNodeById(db, "v1-node");
+    expect(node?.capturedAt).toBe(5555);
+    expect(node?.segment).toBe("life_story");
+    expect(node?.memoryDate).toBeNull();
+    expect(node?.memoryDateGranularity).toBeNull();
+  });
+
+  it("imports a v1 record with parent-child nodes in correct order", () => {
+    const legacy: LegacyDumpRecord = {
+      version: 1,
+      createdAt: 1000,
+      updatedAt: 2000,
+      nodes: [
+        { id: "child", timestamp: 2000, tag: "echo", content: "child node", depth: 1, parentId: "root" },
+        { id: "root", timestamp: 1000, tag: "root tag", content: "root node", depth: 0, parentId: null },
+      ],
+    };
+    expect(() => importFromJson(db, legacy)).not.toThrow();
+    expect(getNodeCount(db)).toBe(2);
   });
 });

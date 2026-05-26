@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 
 import Database from "better-sqlite3";
 
-import type { DumpNode, MemoryDateGranularity } from "./types.js";
+import type { DumpNode, DumpRecord, MemoryDateGranularity } from "./types.js";
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "dump.db");
 
@@ -125,4 +125,82 @@ export function getNodeCount(db: Db, segment?: string): number {
       })
     : (db.prepare("SELECT COUNT(*) AS count FROM nodes").get() as { count: number });
   return row.count;
+}
+
+export function exportToJson(db: Db): DumpRecord {
+  const rows = db
+    .prepare("SELECT * FROM nodes ORDER BY captured_at ASC")
+    .all() as NodeRow[];
+  return {
+    version: 2,
+    exportedAt: Date.now(),
+    nodes: rows.map(rowToNode),
+  };
+}
+
+export interface LegacyDumpRecord {
+  version: 1;
+  createdAt: number;
+  updatedAt: number;
+  nodes: Array<{
+    id: string;
+    timestamp: number;
+    tag: string;
+    content: string;
+    depth: number;
+    parentId: string | null;
+  }>;
+}
+
+export function importFromJson(db: Db, record: DumpRecord | LegacyDumpRecord): number {
+  let nodes: DumpNode[];
+
+  if (record.version === 1) {
+    nodes = record.nodes.map((n) => ({
+      id: n.id,
+      tag: n.tag,
+      content: n.content,
+      parentId: n.parentId,
+      capturedAt: n.timestamp,
+      memoryDate: null,
+      memoryDateGranularity: null,
+      segment: "life_story",
+      depth: n.depth,
+    }));
+  } else {
+    nodes = record.nodes;
+  }
+
+  // Insert parents before children to satisfy the foreign key constraint.
+  const sorted = [...nodes].sort((a, b) => a.depth - b.depth);
+
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO nodes (
+      id, tag, content, parent_id, captured_at,
+      memory_date, memory_date_granularity, segment, depth
+    ) VALUES (
+      @id, @tag, @content, @parent_id, @captured_at,
+      @memory_date, @memory_date_granularity, @segment, @depth
+    )`,
+  );
+
+  let imported = 0;
+  db.transaction(() => {
+    for (const node of sorted) {
+      const result = stmt.run({
+        id: node.id,
+        tag: node.tag,
+        content: node.content,
+        parent_id: node.parentId,
+        captured_at: node.capturedAt,
+        memory_date: node.memoryDate,
+        memory_date_granularity: node.memoryDateGranularity,
+        segment: node.segment,
+        depth: node.depth,
+      });
+      imported += result.changes;
+    }
+  })();
+
+  return imported;
 }

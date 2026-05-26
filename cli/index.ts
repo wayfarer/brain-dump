@@ -1,11 +1,15 @@
 import "dotenv/config";
+import { existsSync, readFileSync, renameSync } from "node:fs";
+import { resolve } from "node:path";
 import * as readline from "node:readline";
 
 import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn } from "./interview.js";
-import { getRecentNodes, openDb } from "./store.js";
 import type { InterviewState } from "./interview.js";
+import { getNodeCount, getRecentNodes, importFromJson, openDb } from "./store.js";
+import type { LegacyDumpRecord } from "./store.js";
+import type { DumpRecord } from "./types.js";
 
 async function main(): Promise<void> {
   if (!process.env.OPENAI_API_KEY) {
@@ -16,6 +20,15 @@ async function main(): Promise<void> {
   }
 
   const db = openDb();
+
+  const jsonPath = resolve(process.cwd(), "dump.json");
+  if (existsSync(jsonPath) && getNodeCount(db) === 0) {
+    const record = JSON.parse(readFileSync(jsonPath, "utf-8")) as DumpRecord | LegacyDumpRecord;
+    const count = importFromJson(db, record);
+    renameSync(jsonPath, jsonPath + ".migrated");
+    console.log(`Migrated ${count} node${count !== 1 ? "s" : ""} from dump.json.\n`);
+  }
+
   const client = new OpenAI();
   const lastNode = getRecentNodes(db, 1)[0];
 
