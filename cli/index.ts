@@ -4,7 +4,7 @@ import * as readline from "node:readline";
 import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn } from "./interview.js";
-import { createFreshRecord, loadRecord, saveRecord } from "./store.js";
+import { getRecentNodes, openDb } from "./store.js";
 import type { InterviewState } from "./interview.js";
 
 async function main(): Promise<void> {
@@ -15,17 +15,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const record = loadRecord() ?? createFreshRecord();
+  const db = openDb();
   const client = new OpenAI();
+  const lastNode = getRecentNodes(db, 1)[0];
 
   const state: InterviewState = {
     history: [],
-    record,
-    lastParentId: record.nodes.at(-1)?.id ?? null,
+    db,
+    lastParentId: lastNode?.id ?? null,
   };
 
   console.log("\nBrain Dump\n");
-  console.log(buildOpeningMessage(record));
+  console.log(buildOpeningMessage(db));
   console.log();
 
   const rl = readline.createInterface({
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
   });
 
   const exit = () => {
-    saveRecord(state.record);
+    db.close();
     console.log("\n\nSession saved. See you next time.\n");
     process.exit(0);
   };

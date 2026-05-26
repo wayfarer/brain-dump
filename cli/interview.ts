@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
-import { saveRecord } from "./store.js";
-import type { DumpNode, DumpRecord } from "./types.js";
+import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode } from "./store.js";
+import type { DumpNode } from "./types.js";
+
+const DEFAULT_SEGMENT = "life_story";
 
 const EXTRACT_NODE_TOOL: OpenAI.ChatCompletionTool = {
   type: "function",
@@ -51,19 +53,17 @@ Rules:
 
 export interface InterviewState {
   history: OpenAI.Chat.ChatCompletionMessageParam[];
-  record: DumpRecord;
+  db: Db;
   lastParentId: string | null;
 }
 
-export function buildSystemPrompt(record: DumpRecord): string {
-  if (record.nodes.length === 0) {
+export function buildSystemPrompt(db: Db): string {
+  if (getNodeCount(db) === 0) {
     return BASE_SYSTEM_PROMPT;
   }
 
-  const recent = record.nodes.slice(-10);
-  const summary = recent
-    .map((n) => `"${n.tag}" — depth ${n.depth}`)
-    .join("\n");
+  const recent = getRecentNodes(db, 10).reverse();
+  const summary = recent.map((n) => `"${n.tag}" — depth ${n.depth}`).join("\n");
 
   return `${BASE_SYSTEM_PROMPT}
 
@@ -73,8 +73,8 @@ ${summary}
 Pick up naturally: continue an open thread or open a new area of their life not yet explored.`;
 }
 
-export function buildOpeningMessage(record: DumpRecord): string {
-  if (record.nodes.length === 0) {
+export function buildOpeningMessage(db: Db): string {
+  if (getNodeCount(db) === 0) {
     return "What is your first memory?";
   }
   return "Welcome back. Where would you like to go today?";
@@ -90,7 +90,7 @@ export async function runTurn(
   const stream = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: buildSystemPrompt(state.record) },
+      { role: "system", content: buildSystemPrompt(state.db) },
       ...state.history,
     ],
     tools: [EXTRACT_NODE_TOOL],
@@ -142,18 +142,20 @@ export async function runTurn(
       continue;
     }
 
-    const parentNode = state.record.nodes.find((n) => n.id === args.parentId);
+    const parentNode = args.parentId ? getNodeById(state.db, args.parentId) : null;
     const node: DumpNode = {
       id: randomUUID(),
-      timestamp: Date.now(),
       tag: args.tag,
       content: args.content,
-      depth: parentNode ? parentNode.depth + 1 : 0,
       parentId: args.parentId || null,
+      capturedAt: Date.now(),
+      memoryDate: null,
+      memoryDateGranularity: null,
+      segment: DEFAULT_SEGMENT,
+      depth: parentNode ? parentNode.depth + 1 : 0,
     };
 
-    state.record.nodes.push(node);
-    saveRecord(state.record);
+    insertNode(state.db, node);
     state.lastParentId = node.id;
 
     state.history.push({ role: "tool", tool_call_id: tc.id, content: "ok" });

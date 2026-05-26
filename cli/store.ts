@@ -1,40 +1,128 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import type { DumpRecord } from "./types.js";
+import Database from "better-sqlite3";
 
-const DUMP_PATH = resolve(process.cwd(), "dump.json");
+import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
-export function loadRecord(): DumpRecord | null {
-  if (!existsSync(DUMP_PATH)) {
-    return null;
-  }
+const DEFAULT_DB_PATH = resolve(process.cwd(), "dump.db");
 
-  let raw: string;
-  try {
-    raw = readFileSync(DUMP_PATH, "utf-8");
-  } catch (err) {
-    console.error(`Error reading dump.json: ${err}`);
-    process.exit(1);
-    return null;
-  }
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS nodes (
+  id TEXT PRIMARY KEY,
+  tag TEXT NOT NULL,
+  content TEXT NOT NULL,
+  parent_id TEXT REFERENCES nodes(id),
+  captured_at INTEGER NOT NULL,
+  memory_date TEXT,
+  memory_date_granularity TEXT,
+  segment TEXT NOT NULL DEFAULT 'life_story',
+  depth INTEGER NOT NULL
+);
 
-  try {
-    return JSON.parse(raw) as DumpRecord;
-  } catch {
-    console.error(
-      "dump.json exists but could not be parsed. Please fix or delete it and try again.",
-    );
-    process.exit(1);
-  }
+CREATE INDEX IF NOT EXISTS idx_nodes_tag ON nodes(tag);
+CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_captured_at ON nodes(captured_at);
+CREATE INDEX IF NOT EXISTS idx_nodes_segment ON nodes(segment);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+  content,
+  content='nodes',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
+  INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
+  INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
+  INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+  INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+`;
+
+export type Db = Database.Database;
+
+export function openDb(path: string = DEFAULT_DB_PATH): Db {
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  db.exec(SCHEMA);
+  return db;
 }
 
-export function saveRecord(record: DumpRecord): void {
-  record.updatedAt = Date.now();
-  writeFileSync(DUMP_PATH, JSON.stringify(record, null, 2), "utf-8");
+interface NodeRow {
+  id: string;
+  tag: string;
+  content: string;
+  parent_id: string | null;
+  captured_at: number;
+  memory_date: string | null;
+  memory_date_granularity: string | null;
+  segment: string;
+  depth: number;
 }
 
-export function createFreshRecord(): DumpRecord {
-  const now = Date.now();
-  return { version: 1, createdAt: now, updatedAt: now, nodes: [] };
+function rowToNode(row: NodeRow): DumpNode {
+  return {
+    id: row.id,
+    tag: row.tag,
+    content: row.content,
+    parentId: row.parent_id,
+    capturedAt: row.captured_at,
+    memoryDate: row.memory_date,
+    memoryDateGranularity: row.memory_date_granularity as MemoryDateGranularity | null,
+    segment: row.segment,
+    depth: row.depth,
+  };
+}
+
+export function insertNode(db: Db, node: DumpNode): void {
+  db.prepare(
+    `INSERT INTO nodes (
+      id, tag, content, parent_id, captured_at,
+      memory_date, memory_date_granularity, segment, depth
+    ) VALUES (
+      @id, @tag, @content, @parent_id, @captured_at,
+      @memory_date, @memory_date_granularity, @segment, @depth
+    )`,
+  ).run({
+    id: node.id,
+    tag: node.tag,
+    content: node.content,
+    parent_id: node.parentId,
+    captured_at: node.capturedAt,
+    memory_date: node.memoryDate,
+    memory_date_granularity: node.memoryDateGranularity,
+    segment: node.segment,
+    depth: node.depth,
+  });
+}
+
+export function getNodeById(db: Db, id: string): DumpNode | null {
+  const row = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id) as NodeRow | undefined;
+  return row ? rowToNode(row) : null;
+}
+
+export function getRecentNodes(db: Db, limit: number, segment?: string): DumpNode[] {
+  const rows = segment
+    ? (db
+        .prepare("SELECT * FROM nodes WHERE segment = ? ORDER BY captured_at DESC LIMIT ?")
+        .all(segment, limit) as NodeRow[])
+    : (db
+        .prepare("SELECT * FROM nodes ORDER BY captured_at DESC LIMIT ?")
+        .all(limit) as NodeRow[]);
+  return rows.map(rowToNode);
+}
+
+export function getNodeCount(db: Db, segment?: string): number {
+  const row = segment
+    ? (db.prepare("SELECT COUNT(*) AS count FROM nodes WHERE segment = ?").get(segment) as {
+        count: number;
+      })
+    : (db.prepare("SELECT COUNT(*) AS count FROM nodes").get() as { count: number });
+  return row.count;
 }

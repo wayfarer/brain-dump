@@ -14,6 +14,7 @@
     "dump": "tsx --tsconfig cli/tsconfig.json cli/index.ts"
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
@@ -30,6 +31,7 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^28.0.3",
     "@types/node": "latest",
     "@types/react": "latest",
