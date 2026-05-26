@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
-import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode } from "./store.js";
-import type { DumpNode } from "./types.js";
+import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode, searchNodes } from "./store.js";
+import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
 const DEFAULT_SEGMENT = "life_story";
 
@@ -33,6 +33,20 @@ const EXTRACT_NODE_TOOL: OpenAI.ChatCompletionTool = {
           description:
             'id of the parent DumpNode, or empty string "" if this is a root memory.',
         },
+        memoryDate: {
+          type: "string",
+          description:
+            "When the memory occurred. Use ISO format when precise (\"2003-03-15\", \"1987-06\", \"1987\"), " +
+            "or a descriptive string when vague (\"early 1980s\", \"summer of my childhood\"). Omit if unknown.",
+        },
+        memoryDateGranularity: {
+          type: "string",
+          enum: ["decade", "year", "season", "month", "date", "datetime"],
+          description:
+            "How precisely the date is known. " +
+            "decade: only the decade is known; year: a specific year; season: season of a year; " +
+            "month: month and year; date: full date; datetime: date and time.",
+        },
       },
       required: ["tag", "content", "parentId"],
     },
@@ -49,6 +63,7 @@ Rules:
 - No filler phrases ("That's interesting", "Thank you for sharing").
 - Vary your approach: zoom in on a detail, ask about a person, ask what came just before or after, ask how old they were.
 - When the user shares a memory worth preserving, call extract_memory_node silently before writing your question. Do not mention it.
+- In extract_memory_node, always include memoryDate and memoryDateGranularity when the user gives any time clue — age, grade, season, decade, or year. Estimate conservatively when unsure (e.g., a stated age + known birth year → specific year).
 - Never break character. Never explain yourself.`;
 
 export interface InterviewState {
@@ -57,13 +72,27 @@ export interface InterviewState {
   lastParentId: string | null;
 }
 
-export function buildSystemPrompt(db: Db): string {
+export function buildSystemPrompt(db: Db, recentInput?: string): string {
   if (getNodeCount(db) === 0) {
     return BASE_SYSTEM_PROMPT;
   }
 
-  const recent = getRecentNodes(db, 10).reverse();
-  const summary = recent.map((n) => `"${n.tag}" — depth ${n.depth}`).join("\n");
+  let contextNodes: DumpNode[];
+
+  if (recentInput) {
+    const searched = searchNodes(db, recentInput, 5);
+    if (searched.length > 0) {
+      const searchedIds = new Set(searched.map((n) => n.id));
+      const filler = getRecentNodes(db, 10).filter((n) => !searchedIds.has(n.id));
+      contextNodes = [...searched, ...filler].slice(0, 10).reverse();
+    } else {
+      contextNodes = getRecentNodes(db, 10).reverse();
+    }
+  } else {
+    contextNodes = getRecentNodes(db, 10).reverse();
+  }
+
+  const summary = contextNodes.map((n) => `"${n.tag}" — depth ${n.depth}`).join("\n");
 
   return `${BASE_SYSTEM_PROMPT}
 
@@ -90,7 +119,7 @@ export async function runTurn(
   const stream = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: buildSystemPrompt(state.db) },
+      { role: "system", content: buildSystemPrompt(state.db, userInput) },
       ...state.history,
     ],
     tools: [EXTRACT_NODE_TOOL],
@@ -134,7 +163,13 @@ export async function runTurn(
   });
 
   for (const tc of completedToolCalls) {
-    let args: { tag: string; content: string; parentId: string };
+    let args: {
+      tag: string;
+      content: string;
+      parentId: string;
+      memoryDate?: string;
+      memoryDateGranularity?: string;
+    };
     try {
       args = JSON.parse(tc.arguments) as typeof args;
     } catch {
@@ -142,6 +177,7 @@ export async function runTurn(
       continue;
     }
 
+    const VALID_GRANULARITIES = new Set<string>(["decade", "year", "season", "month", "date", "datetime"]);
     const parentNode = args.parentId ? getNodeById(state.db, args.parentId) : null;
     const node: DumpNode = {
       id: randomUUID(),
@@ -149,8 +185,11 @@ export async function runTurn(
       content: args.content,
       parentId: args.parentId || null,
       capturedAt: Date.now(),
-      memoryDate: null,
-      memoryDateGranularity: null,
+      memoryDate: args.memoryDate || null,
+      memoryDateGranularity:
+        args.memoryDateGranularity && VALID_GRANULARITIES.has(args.memoryDateGranularity)
+          ? (args.memoryDateGranularity as MemoryDateGranularity)
+          : null,
       segment: DEFAULT_SEGMENT,
       depth: parentNode ? parentNode.depth + 1 : 0,
     };

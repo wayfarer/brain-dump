@@ -11,6 +11,7 @@ import {
   importFromJson,
   insertNode,
   openDb,
+  searchNodes,
 } from "./store.js";
 import type { DumpNode, DumpRecord } from "./types.js";
 
@@ -145,6 +146,40 @@ describe("FTS5 sync via triggers", () => {
       .prepare("SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH 'grandmother'")
       .all();
     expect(matches).toHaveLength(0);
+  });
+});
+
+describe("searchNodes", () => {
+  it("returns nodes whose content matches the query", () => {
+    insertNode(db, makeNode({ id: "a", content: "I remember my grandmother's hands" }));
+    insertNode(db, makeNode({ id: "b", content: "driving to school every morning" }));
+    const results = searchNodes(db, "grandmother hands", 5);
+    expect(results.map((n) => n.id)).toContain("a");
+    expect(results.map((n) => n.id)).not.toContain("b");
+  });
+
+  it("returns empty array when no nodes match", () => {
+    insertNode(db, makeNode({ id: "a", content: "the kitchen table" }));
+    const results = searchNodes(db, "volcano eruption", 5);
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns empty array for a query with no words >= 4 chars", () => {
+    insertNode(db, makeNode({ id: "a", content: "the big red bus" }));
+    const results = searchNodes(db, "my the in", 5);
+    expect(results).toHaveLength(0);
+  });
+
+  it("respects the limit argument", () => {
+    for (let i = 0; i < 5; i++) {
+      insertNode(db, makeNode({ id: `n${i}`, content: `grandmother story number ${i}` }));
+    }
+    const results = searchNodes(db, "grandmother", 3);
+    expect(results).toHaveLength(3);
+  });
+
+  it("returns empty array without throwing on empty db", () => {
+    expect(searchNodes(db, "anything", 5)).toHaveLength(0);
   });
 });
 

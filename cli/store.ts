@@ -127,6 +127,34 @@ export function getNodeCount(db: Db, segment?: string): number {
   return row.count;
 }
 
+function toFtsQuery(input: string): string {
+  return input
+    .replace(/[":*^()\-]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4)
+    .slice(0, 8)
+    .join(" OR ");
+}
+
+export function searchNodes(db: Db, query: string, limit: number = 5): DumpNode[] {
+  const ftsQuery = toFtsQuery(query);
+  if (!ftsQuery) return [];
+  try {
+    const rows = db
+      .prepare(
+        `SELECT nodes.* FROM nodes
+         JOIN nodes_fts ON nodes.rowid = nodes_fts.rowid
+         WHERE nodes_fts MATCH ?
+         ORDER BY rank
+         LIMIT ?`,
+      )
+      .all(ftsQuery, limit) as NodeRow[];
+    return rows.map(rowToNode);
+  } catch {
+    return [];
+  }
+}
+
 export function exportToJson(db: Db): DumpRecord {
   const rows = db
     .prepare("SELECT * FROM nodes ORDER BY captured_at ASC")

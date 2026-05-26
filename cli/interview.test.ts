@@ -118,6 +118,19 @@ describe("buildSystemPrompt", () => {
     const matches = prompt.match(/depth \d/g) ?? [];
     expect(matches).toHaveLength(10);
   });
+
+  it("prioritises FTS-matched nodes when recentInput is provided", () => {
+    insertNode(db, makeNode({ id: "old", tag: "distant memory", content: "grandmother in the garden", capturedAt: 1 }));
+    for (let i = 0; i < 10; i++) {
+      insertNode(db, makeNode({ id: `new${i}`, tag: `recent-${i}`, content: "daily routine stuff", capturedAt: 1000 + i }));
+    }
+    // Without recentInput, "distant memory" is too old to appear in last 10
+    const promptWithout = buildSystemPrompt(db);
+    expect(promptWithout).not.toContain("distant memory");
+    // With recentInput matching "grandmother", it surfaces
+    const promptWith = buildSystemPrompt(db, "I was with my grandmother");
+    expect(promptWith).toContain("distant memory");
+  });
 });
 
 // --- buildOpeningMessage ---
@@ -172,6 +185,40 @@ describe("runTurn", () => {
     ) as OpenAI.Chat.ChatCompletionToolMessageParam | undefined;
     expect(toolMsg?.content).toBe("ok");
     expect(state.lastParentId).toBe(stored.id);
+  });
+
+  it("tool-call with date fields: persists memoryDate and memoryDateGranularity", async () => {
+    const args = JSON.stringify({
+      tag: "summer freedom",
+      content: "riding bikes until dark",
+      parentId: "",
+      memoryDate: "1994",
+      memoryDateGranularity: "year",
+    });
+    const { client } = makeMockClient([toolCallChunk(0, "call_date", "extract_memory_node", args)]);
+    const state = makeState();
+    await runTurn(client, state, "what did you do that summer");
+
+    const stored = getRecentNodes(db, 1)[0];
+    expect(stored.memoryDate).toBe("1994");
+    expect(stored.memoryDateGranularity).toBe("year");
+  });
+
+  it("tool-call with invalid granularity: stores null for memoryDateGranularity", async () => {
+    const args = JSON.stringify({
+      tag: "wonder and curiosity",
+      content: "the attic boxes",
+      parentId: "",
+      memoryDate: "1990s",
+      memoryDateGranularity: "invalid_value",
+    });
+    const { client } = makeMockClient([toolCallChunk(0, "call_badgran", "extract_memory_node", args)]);
+    const state = makeState();
+    await runTurn(client, state, "tell me about that");
+
+    const stored = getRecentNodes(db, 1)[0];
+    expect(stored.memoryDate).toBe("1990s");
+    expect(stored.memoryDateGranularity).toBeNull();
   });
 
   it("multi-chunk argument assembly: assembles into a single persisted node", async () => {

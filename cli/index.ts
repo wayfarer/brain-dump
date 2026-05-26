@@ -7,7 +7,7 @@ import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn } from "./interview.js";
 import type { InterviewState } from "./interview.js";
-import { getNodeCount, getRecentNodes, importFromJson, openDb } from "./store.js";
+import { getNodeCount, getRecentNodes, importFromJson, openDb, searchNodes } from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
 import type { DumpRecord } from "./types.js";
 
@@ -53,6 +53,26 @@ async function main(): Promise<void> {
   rl.on("line", async (line) => {
     const input = line.trim();
     if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith("/search ")) {
+      const query = input.slice(8).trim();
+      console.log();
+      if (query) {
+        const results = searchNodes(db, query, 10);
+        if (results.length === 0) {
+          console.log("No matches found.");
+        } else {
+          for (const node of results) {
+            const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
+            const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
+            console.log(`  "${node.tag}"${date} — ${preview}`);
+          }
+        }
+      }
+      console.log();
       rl.prompt();
       return;
     }
