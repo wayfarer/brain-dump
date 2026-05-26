@@ -118,6 +118,12 @@ export function getRecentNodes(db: Db, limit: number, segment?: string): DumpNod
   return rows.map(rowToNode);
 }
 
+export function getTagCounts(db: Db): Array<{ tag: string; count: number }> {
+  return db
+    .prepare("SELECT tag, COUNT(*) AS count FROM nodes GROUP BY tag ORDER BY count DESC")
+    .all() as Array<{ tag: string; count: number }>;
+}
+
 export function getNodeCount(db: Db, segment?: string): number {
   const row = segment
     ? (db.prepare("SELECT COUNT(*) AS count FROM nodes WHERE segment = ?").get(segment) as {

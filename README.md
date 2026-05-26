@@ -92,3 +92,6 @@ During a session, lines starting with `/` are handled locally without calling th
 | Command | Description |
 |---|---|
 | `/search <query>` | Full-text search across all captured nodes. Prints matching nodes with their tag, memory date (if known), and a content preview. |
+| `/list [n]` | Show the `n` most recent captured nodes (default 10). |
+| `/tags` | List all tags with occurrence counts, sorted by frequency. |
+| `/exit` | End the session (equivalent to Ctrl+C). |

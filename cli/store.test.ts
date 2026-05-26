@@ -8,6 +8,7 @@ import {
   getNodeById,
   getNodeCount,
   getRecentNodes,
+  getTagCounts,
   importFromJson,
   insertNode,
   openDb,
@@ -108,6 +109,32 @@ describe("getRecentNodes", () => {
     insertNode(db, makeNode({ id: "dr", segment: "dream_journal" }));
     const lifeStory = getRecentNodes(db, 10, "life_story");
     expect(lifeStory.map((n) => n.id)).toEqual(["ls"]);
+  });
+});
+
+describe("getTagCounts", () => {
+  it("returns empty array when no nodes", () => {
+    expect(getTagCounts(db)).toHaveLength(0);
+  });
+
+  it("returns each tag once with the correct count", () => {
+    insertNode(db, makeNode({ id: "a", tag: "sudden loss" }));
+    insertNode(db, makeNode({ id: "b", tag: "sudden loss" }));
+    insertNode(db, makeNode({ id: "c", tag: "quiet joy" }));
+    const counts = getTagCounts(db);
+    expect(counts.find((r) => r.tag === "sudden loss")?.count).toBe(2);
+    expect(counts.find((r) => r.tag === "quiet joy")?.count).toBe(1);
+  });
+
+  it("sorts by count descending", () => {
+    insertNode(db, makeNode({ id: "a", tag: "fierce belonging" }));
+    insertNode(db, makeNode({ id: "b", tag: "quiet shame" }));
+    insertNode(db, makeNode({ id: "c", tag: "quiet shame" }));
+    insertNode(db, makeNode({ id: "d", tag: "quiet shame" }));
+    const counts = getTagCounts(db);
+    expect(counts[0].tag).toBe("quiet shame");
+    expect(counts[0].count).toBe(3);
+    expect(counts[1].tag).toBe("fierce belonging");
   });
 });
 

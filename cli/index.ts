@@ -7,7 +7,7 @@ import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn } from "./interview.js";
 import type { InterviewState } from "./interview.js";
-import { getNodeCount, getRecentNodes, importFromJson, openDb, searchNodes } from "./store.js";
+import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
 import type { DumpRecord } from "./types.js";
 
@@ -53,6 +53,45 @@ async function main(): Promise<void> {
   rl.on("line", async (line) => {
     const input = line.trim();
     if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/exit") {
+      rl.close();
+      return;
+    }
+
+    if (input === "/list" || input.startsWith("/list ")) {
+      const arg = input.slice(5).trim();
+      const limit = Math.max(1, parseInt(arg, 10) || 10);
+      console.log();
+      const nodes = getRecentNodes(db, limit);
+      if (nodes.length === 0) {
+        console.log("No nodes captured yet.");
+      } else {
+        for (const node of nodes) {
+          const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
+          const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
+          console.log(`  "${node.tag}"${date} — ${preview}`);
+        }
+      }
+      console.log();
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/tags") {
+      console.log();
+      const counts = getTagCounts(db);
+      if (counts.length === 0) {
+        console.log("No tags yet.");
+      } else {
+        for (const { tag, count } of counts) {
+          console.log(`  "${tag}" × ${count}`);
+        }
+      }
+      console.log();
       rl.prompt();
       return;
     }
