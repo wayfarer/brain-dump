@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "node16",
+    "module": "node16",
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "jsx": "preserve"
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["../node_modules", "../src"]
+}

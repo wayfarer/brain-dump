@@ -10,13 +10,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dump": "tsx --tsconfig cli/tsconfig.json cli/index.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^17.4.2",
     "lucide-react": "^1.16.0",
     "next": "latest",
+    "openai": "^6.39.0",
     "react": "latest",
     "react-dom": "latest",
     "tailwind-merge": "^3.6.0"
@@ -40,6 +43,7 @@
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "tailwindcss": "^4.3.0",
+    "tsx": "^4.22.3",
     "typescript": "latest",
     "vitest": "^4.1.6"
   }
