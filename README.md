@@ -79,11 +79,21 @@ The CLI is the primary capture interface. The web app is a splash; a graph/timel
 ## Running
 
 ```sh
-npm run dump   # Start an interview session
-npm test       # Run the test suite (CLI unit + integration)
+npm run dump                          # Start a life_story session (default)
+npm run dump -- --segment dream_journal  # Start a dream_journal session
+npm test                              # Run the test suite (CLI unit + integration)
 ```
 
 Requires `OPENAI_API_KEY` in `.env` (see `.env.example`).
+
+### Segments
+
+| Segment | Opening question |
+|---|---|
+| `life_story` | What is your first memory? |
+| `dream_journal` | Tell me about a dream you remember. |
+
+Each session writes only to its own segment. Context surfaced to the interviewer is scoped to the active segment.
 
 ### REPL commands
 

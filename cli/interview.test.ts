@@ -6,6 +6,7 @@ import {
   buildSystemPrompt,
   buildOpeningMessage,
   runTurn,
+  SEGMENTS,
   type InterviewState,
 } from "./interview.js";
 import {
@@ -96,14 +97,14 @@ afterEach(() => {
 });
 
 function makeState(): InterviewState {
-  return { history: [], db, lastParentId: null };
+  return { history: [], db, lastParentId: null, segment: "life_story" };
 }
 
 // --- buildSystemPrompt ---
 
 describe("buildSystemPrompt", () => {
   it("returns base prompt when db is empty", () => {
-    const prompt = buildSystemPrompt(db);
+    const prompt = buildSystemPrompt(db, "life_story");
     expect(prompt).toContain("warm, patient interviewer");
     expect(prompt).not.toContain("Context from previous sessions");
   });
@@ -112,7 +113,7 @@ describe("buildSystemPrompt", () => {
     for (let i = 0; i < 11; i++) {
       insertNode(db, makeNode({ id: `n${i}`, tag: `tag-${i}`, capturedAt: i }));
     }
-    const prompt = buildSystemPrompt(db);
+    const prompt = buildSystemPrompt(db, "life_story");
     expect(prompt).toContain("tag-10");
     expect(prompt).not.toContain("tag-0");
     const matches = prompt.match(/depth \d/g) ?? [];
@@ -125,11 +126,19 @@ describe("buildSystemPrompt", () => {
       insertNode(db, makeNode({ id: `new${i}`, tag: `recent-${i}`, content: "daily routine stuff", capturedAt: 1000 + i }));
     }
     // Without recentInput, "distant memory" is too old to appear in last 10
-    const promptWithout = buildSystemPrompt(db);
+    const promptWithout = buildSystemPrompt(db, "life_story");
     expect(promptWithout).not.toContain("distant memory");
     // With recentInput matching "grandmother", it surfaces
-    const promptWith = buildSystemPrompt(db, "I was with my grandmother");
+    const promptWith = buildSystemPrompt(db, "life_story", "I was with my grandmother");
     expect(promptWith).toContain("distant memory");
+  });
+
+  it("only surfaces nodes from the active segment", () => {
+    insertNode(db, makeNode({ id: "ls", tag: "life memory", content: "the old house", capturedAt: 1, segment: "life_story" }));
+    insertNode(db, makeNode({ id: "dj", tag: "dream vision", content: "flying over water", capturedAt: 2, segment: "dream_journal" }));
+    const prompt = buildSystemPrompt(db, "dream_journal");
+    expect(prompt).toContain("dream vision");
+    expect(prompt).not.toContain("life memory");
   });
 });
 
@@ -137,12 +146,23 @@ describe("buildSystemPrompt", () => {
 
 describe("buildOpeningMessage", () => {
   it("returns first-session prompt when db is empty", () => {
-    expect(buildOpeningMessage(db)).toBe("What is your first memory?");
+    expect(buildOpeningMessage(db, "life_story")).toBe("What is your first memory?");
   });
 
   it("returns returning-user prompt when nodes exist", () => {
     insertNode(db, makeNode({ id: "a1", tag: "wonder" }));
-    expect(buildOpeningMessage(db)).toBe("Welcome back. Where would you like to go today?");
+    expect(buildOpeningMessage(db, "life_story")).toBe("Welcome back. Where would you like to go today?");
+  });
+
+  it("uses segment-specific questions for dream_journal", () => {
+    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.openingQuestion);
+    insertNode(db, makeNode({ id: "d1", tag: "dream vision", segment: "dream_journal" }));
+    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.returnGreeting);
+  });
+
+  it("treats segments independently — life_story nodes do not count for dream_journal", () => {
+    insertNode(db, makeNode({ id: "ls1", tag: "quiet joy", segment: "life_story" }));
+    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.openingQuestion);
   });
 });
 

@@ -5,7 +5,24 @@ import OpenAI from "openai";
 import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode, searchNodes } from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
-const DEFAULT_SEGMENT = "life_story";
+export interface SegmentConfig {
+  id: string;
+  openingQuestion: string;
+  returnGreeting: string;
+}
+
+export const SEGMENTS: Record<string, SegmentConfig> = {
+  life_story: {
+    id: "life_story",
+    openingQuestion: "What is your first memory?",
+    returnGreeting: "Welcome back. Where would you like to go today?",
+  },
+  dream_journal: {
+    id: "dream_journal",
+    openingQuestion: "Tell me about a dream you remember.",
+    returnGreeting: "Welcome back. What have you been dreaming about?",
+  },
+};
 
 const EXTRACT_NODE_TOOL: OpenAI.ChatCompletionTool = {
   type: "function",
@@ -70,26 +87,27 @@ export interface InterviewState {
   history: OpenAI.Chat.ChatCompletionMessageParam[];
   db: Db;
   lastParentId: string | null;
+  segment: string;
 }
 
-export function buildSystemPrompt(db: Db, recentInput?: string): string {
-  if (getNodeCount(db) === 0) {
+export function buildSystemPrompt(db: Db, segment: string, recentInput?: string): string {
+  if (getNodeCount(db, segment) === 0) {
     return BASE_SYSTEM_PROMPT;
   }
 
   let contextNodes: DumpNode[];
 
   if (recentInput) {
-    const searched = searchNodes(db, recentInput, 5);
+    const searched = searchNodes(db, recentInput, 5).filter((n) => n.segment === segment);
     if (searched.length > 0) {
       const searchedIds = new Set(searched.map((n) => n.id));
-      const filler = getRecentNodes(db, 10).filter((n) => !searchedIds.has(n.id));
+      const filler = getRecentNodes(db, 10, segment).filter((n) => !searchedIds.has(n.id));
       contextNodes = [...searched, ...filler].slice(0, 10).reverse();
     } else {
-      contextNodes = getRecentNodes(db, 10).reverse();
+      contextNodes = getRecentNodes(db, 10, segment).reverse();
     }
   } else {
-    contextNodes = getRecentNodes(db, 10).reverse();
+    contextNodes = getRecentNodes(db, 10, segment).reverse();
   }
 
   const summary = contextNodes.map((n) => `"${n.tag}" — depth ${n.depth}`).join("\n");
@@ -102,11 +120,12 @@ ${summary}
 Pick up naturally: continue an open thread or open a new area of their life not yet explored.`;
 }
 
-export function buildOpeningMessage(db: Db): string {
-  if (getNodeCount(db) === 0) {
-    return "What is your first memory?";
+export function buildOpeningMessage(db: Db, segment: string): string {
+  const config = SEGMENTS[segment];
+  if (getNodeCount(db, segment) === 0) {
+    return config.openingQuestion;
   }
-  return "Welcome back. Where would you like to go today?";
+  return config.returnGreeting;
 }
 
 export async function runTurn(
@@ -119,7 +138,7 @@ export async function runTurn(
   const stream = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: buildSystemPrompt(state.db, userInput) },
+      { role: "system", content: buildSystemPrompt(state.db, state.segment, userInput) },
       ...state.history,
     ],
     tools: [EXTRACT_NODE_TOOL],
@@ -190,7 +209,7 @@ export async function runTurn(
         args.memoryDateGranularity && VALID_GRANULARITIES.has(args.memoryDateGranularity)
           ? (args.memoryDateGranularity as MemoryDateGranularity)
           : null,
-      segment: DEFAULT_SEGMENT,
+      segment: state.segment,
       depth: parentNode ? parentNode.depth + 1 : 0,
     };
 

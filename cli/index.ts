@@ -5,7 +5,7 @@ import * as readline from "node:readline";
 
 import OpenAI from "openai";
 
-import { buildOpeningMessage, runTurn } from "./interview.js";
+import { buildOpeningMessage, runTurn, SEGMENTS } from "./interview.js";
 import type { InterviewState } from "./interview.js";
 import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
@@ -19,6 +19,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const segmentFlagIdx = process.argv.indexOf("--segment");
+  const segmentArg = segmentFlagIdx !== -1 ? (process.argv[segmentFlagIdx + 1] ?? "") : "life_story";
+  if (!SEGMENTS[segmentArg]) {
+    console.error(`Unknown segment "${segmentArg}". Available: ${Object.keys(SEGMENTS).join(", ")}`);
+    process.exit(1);
+  }
+  const segment = segmentArg;
+
   const db = openDb();
 
   const jsonPath = resolve(process.cwd(), "dump.json");
@@ -30,16 +38,17 @@ async function main(): Promise<void> {
   }
 
   const client = new OpenAI();
-  const lastNode = getRecentNodes(db, 1)[0];
+  const lastNode = getRecentNodes(db, 1, segment)[0];
 
   const state: InterviewState = {
     history: [],
     db,
     lastParentId: lastNode?.id ?? null,
+    segment,
   };
 
-  console.log("\nBrain Dump\n");
-  console.log(buildOpeningMessage(db));
+  console.log(`\nBrain Dump${segment !== "life_story" ? `  [${segment}]` : ""}\n`);
+  console.log(buildOpeningMessage(db, segment));
   console.log();
 
   const rl = readline.createInterface({
