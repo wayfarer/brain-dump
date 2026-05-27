@@ -2,6 +2,9 @@
   "name": "brain-dump",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "braindump": "./bin/braindump.mjs"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -23,7 +26,8 @@
     "openai": "^6.39.0",
     "react": "latest",
     "react-dom": "latest",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "tsx": "^4.22.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "latest",
@@ -45,7 +49,6 @@
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "tailwindcss": "^4.3.0",
-    "tsx": "^4.22.3",
     "typescript": "latest",
     "vitest": "^4.1.6"
   }
