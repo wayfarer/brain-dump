@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
-import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode, searchNodes, searchNodesByVector, storeEmbedding } from "./store.js";
+import { type Db, getNodeById, getNodeCount, getRecentNodes, insertEmbedding, insertNode, searchNodes, searchNodesByVector } from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
 export interface SegmentConfig {
@@ -95,6 +95,7 @@ export async function buildSystemPrompt(
   openai: OpenAI,
   segment: string,
   recentInput?: string,
+  recentEmbedding?: number[],
 ): Promise<string> {
   if (getNodeCount(db, segment) === 0) {
     return BASE_SYSTEM_PROMPT;
@@ -106,13 +107,18 @@ export async function buildSystemPrompt(
     let searchResults: DumpNode[] = [];
 
     // Try vector search first; fall back to FTS5.
-    // TODO: thread this embedding through to storeEmbedding to avoid the duplicate call per turn
     try {
-      const response = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: recentInput,
-      });
-      searchResults = searchNodesByVector(db, response.data[0].embedding, 5, segment);
+      let embedding: number[];
+      if (recentEmbedding) {
+        embedding = recentEmbedding;
+      } else {
+        const response = await openai.embeddings.create({
+          model: "text-embedding-3-small",
+          input: recentInput,
+        });
+        embedding = response.data[0].embedding;
+      }
+      searchResults = searchNodesByVector(db, embedding, 5, segment);
     } catch {
       // ignore — fall through to FTS5
     }
@@ -155,12 +161,18 @@ export async function runTurn(
   state: InterviewState,
   userInput: string,
 ): Promise<void> {
+  let userEmbedding: number[] | null = null;
+  try {
+    const r = await client.embeddings.create({ model: "text-embedding-3-small", input: userInput });
+    userEmbedding = r.data[0].embedding;
+  } catch { /* fall through — retrieval degrades to FTS5, storage skipped */ }
+
   state.history.push({ role: "user", content: userInput });
 
   const stream = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: await buildSystemPrompt(state.db, client, state.segment, userInput) },
+      { role: "system", content: await buildSystemPrompt(state.db, client, state.segment, userInput, userEmbedding ?? undefined) },
       ...state.history,
     ],
     tools: [EXTRACT_NODE_TOOL],
@@ -236,8 +248,9 @@ export async function runTurn(
     };
 
     insertNode(state.db, node);
-    // TODO: if db.close() races this promise (e.g. /exit typed immediately), the write silently fails
-    storeEmbedding(state.db, client, node).catch(() => {});
+    if (userEmbedding !== null) {
+      insertEmbedding(state.db, node.id, userEmbedding);
+    }
     state.lastParentId = node.id;
 
     state.history.push({ role: "tool", tool_call_id: tc.id, content: "ok" });

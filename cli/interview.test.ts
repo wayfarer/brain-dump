@@ -164,6 +164,14 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("dream vision");
     expect(prompt).not.toContain("life memory");
   });
+
+  it("uses pre-computed recentEmbedding and does not call embeddings.create", async () => {
+    const openai = makeMockOpenAI();
+    insertNode(db, makeNode({ id: "e1", tag: "quiet joy" }));
+    const prompt = await buildSystemPrompt(db, openai, "life_story", "some input", makeMockEmbedding());
+    expect(prompt).toContain("Context from previous sessions");
+    expect(openai.embeddings.create).not.toHaveBeenCalled();
+  });
 });
 
 // --- buildOpeningMessage ---
