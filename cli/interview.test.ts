@@ -288,6 +288,24 @@ describe("runTurn", () => {
     expect(toolMsg?.content).toBe("error: invalid json");
   });
 
+  it("two simultaneous tool calls: both nodes persisted, both tool messages in history", async () => {
+    const args0 = JSON.stringify({ tag: "quiet joy", content: "the morning light", parentId: "" });
+    const args1 = JSON.stringify({ tag: "sudden loss", content: "the empty chair", parentId: "" });
+    const { client } = makeMockClient([
+      toolCallChunk(0, "call_a", "extract_memory_node", args0),
+      toolCallChunk(1, "call_b", "extract_memory_node", args1),
+    ]);
+    const state = makeState();
+    await runTurn(client, state, "two things happened");
+
+    expect(getNodeCount(db)).toBe(2);
+    const toolMsgs = state.history.filter(
+      (m) => m.role === "tool",
+    ) as OpenAI.Chat.ChatCompletionToolMessageParam[];
+    expect(toolMsgs).toHaveLength(2);
+    expect(toolMsgs.every((m) => m.content === "ok")).toBe(true);
+  });
+
   it("content + tool call: assistant entry has both content and tool_calls", async () => {
     const args = JSON.stringify({ tag: "wonder", content: "the night sky", parentId: "" });
     const { client } = makeMockClient([

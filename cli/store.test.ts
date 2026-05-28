@@ -208,6 +208,18 @@ describe("searchNodes", () => {
   it("returns empty array without throwing on empty db", () => {
     expect(searchNodes(db, "anything", 5)).toHaveLength(0);
   });
+
+  it("strips FTS5 special characters and still matches", () => {
+    insertNode(db, makeNode({ id: "a", content: "I remember my grandmother's hands" }));
+    const results = searchNodes(db, '"grandmother*"', 5);
+    expect(results.map((n) => n.id)).toContain("a");
+  });
+
+  it("strips hyphens so a hyphenated query does not throw and still matches", () => {
+    insertNode(db, makeNode({ id: "a", content: "walking down memory lane" }));
+    const results = searchNodes(db, "memory-lane", 5);
+    expect(results.map((n) => n.id)).toContain("a");
+  });
 });
 
 describe("foreign key constraint on parent_id", () => {
@@ -299,6 +311,16 @@ describe("importFromJson", () => {
     expect(node?.segment).toBe("life_story");
     expect(node?.memoryDate).toBeNull();
     expect(node?.memoryDateGranularity).toBeNull();
+  });
+
+  it("v2 import preserves non-default segment", () => {
+    const record: DumpRecord = {
+      version: 2,
+      exportedAt: Date.now(),
+      nodes: [makeNode({ id: "dj1", segment: "dream_journal" })],
+    };
+    importFromJson(db, record);
+    expect(getNodeById(db, "dj1")?.segment).toBe("dream_journal");
   });
 
   it("imports a v1 record with parent-child nodes in correct order", () => {
