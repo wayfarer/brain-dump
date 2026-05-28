@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
-import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode, searchNodes } from "./store.js";
+import { type Db, getNodeById, getNodeCount, getRecentNodes, insertNode, searchNodes, searchNodesByVector, storeEmbedding } from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
 export interface SegmentConfig {
@@ -90,7 +90,12 @@ export interface InterviewState {
   segment: string;
 }
 
-export function buildSystemPrompt(db: Db, segment: string, recentInput?: string): string {
+export async function buildSystemPrompt(
+  db: Db,
+  openai: OpenAI,
+  segment: string,
+  recentInput?: string,
+): Promise<string> {
   if (getNodeCount(db, segment) === 0) {
     return BASE_SYSTEM_PROMPT;
   }
@@ -98,11 +103,27 @@ export function buildSystemPrompt(db: Db, segment: string, recentInput?: string)
   let contextNodes: DumpNode[];
 
   if (recentInput) {
-    const searched = searchNodes(db, recentInput, 5).filter((n) => n.segment === segment);
-    if (searched.length > 0) {
-      const searchedIds = new Set(searched.map((n) => n.id));
+    let searchResults: DumpNode[] = [];
+
+    // Try vector search first; fall back to FTS5.
+    try {
+      const response = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: recentInput,
+      });
+      searchResults = searchNodesByVector(db, response.data[0].embedding, 5, segment);
+    } catch {
+      // ignore — fall through to FTS5
+    }
+
+    if (searchResults.length === 0) {
+      searchResults = searchNodes(db, recentInput, 5).filter((n) => n.segment === segment);
+    }
+
+    if (searchResults.length > 0) {
+      const searchedIds = new Set(searchResults.map((n) => n.id));
       const filler = getRecentNodes(db, 10, segment).filter((n) => !searchedIds.has(n.id));
-      contextNodes = [...searched, ...filler].slice(0, 10).reverse();
+      contextNodes = [...searchResults, ...filler].slice(0, 10).reverse();
     } else {
       contextNodes = getRecentNodes(db, 10, segment).reverse();
     }
@@ -138,7 +159,7 @@ export async function runTurn(
   const stream = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: buildSystemPrompt(state.db, state.segment, userInput) },
+      { role: "system", content: await buildSystemPrompt(state.db, client, state.segment, userInput) },
       ...state.history,
     ],
     tools: [EXTRACT_NODE_TOOL],
@@ -214,6 +235,7 @@ export async function runTurn(
     };
 
     insertNode(state.db, node);
+    storeEmbedding(state.db, client, node).catch(() => {});
     state.lastParentId = node.id;
 
     state.history.push({ role: "tool", tool_call_id: tc.id, content: "ok" });

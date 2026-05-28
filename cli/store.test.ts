@@ -10,9 +10,11 @@ import {
   getRecentNodes,
   getTagCounts,
   importFromJson,
+  insertEmbedding,
   insertNode,
   openDb,
   searchNodes,
+  searchNodesByVector,
 } from "./store.js";
 import type { DumpNode, DumpRecord } from "./types.js";
 
@@ -335,5 +337,41 @@ describe("importFromJson", () => {
     };
     expect(() => importFromJson(db, legacy)).not.toThrow();
     expect(getNodeCount(db)).toBe(2);
+  });
+});
+
+describe("searchNodesByVector", () => {
+  const vec = new Array(1536).fill(0.1);
+
+  it("returns empty array when no embeddings exist", () => {
+    insertNode(db, makeNode({ id: "a", content: "grandmother in the garden" }));
+    expect(searchNodesByVector(db, vec, 5, "life_story")).toHaveLength(0);
+  });
+
+  it("returns nodes ordered by similarity", () => {
+    insertNode(db, makeNode({ id: "a" }));
+    insertNode(db, makeNode({ id: "b" }));
+    insertEmbedding(db, "a", vec);
+    insertEmbedding(db, "b", vec);
+    const results = searchNodesByVector(db, vec, 5);
+    expect(results.map((n) => n.id)).toEqual(expect.arrayContaining(["a", "b"]));
+  });
+
+  it("filters results to the specified segment", () => {
+    insertNode(db, makeNode({ id: "ls", segment: "life_story" }));
+    insertNode(db, makeNode({ id: "dj", segment: "dream_journal" }));
+    insertEmbedding(db, "ls", vec);
+    insertEmbedding(db, "dj", vec);
+    const results = searchNodesByVector(db, vec, 5, "life_story");
+    expect(results.map((n) => n.id)).toContain("ls");
+    expect(results.map((n) => n.id)).not.toContain("dj");
+  });
+
+  it("respects the limit after over-fetching for segment filtering", () => {
+    for (let i = 0; i < 6; i++) {
+      insertNode(db, makeNode({ id: `n${i}` }));
+      insertEmbedding(db, `n${i}`, vec);
+    }
+    expect(searchNodesByVector(db, vec, 3)).toHaveLength(3);
   });
 });
