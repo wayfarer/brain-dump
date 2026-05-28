@@ -81,15 +81,8 @@ function makeMockClient(chunks: Chunk[]) {
   const mockCreate = vi.fn().mockResolvedValue(makeStream(chunks));
   return {
     client: {
+      ...makeMockOpenAI(),
       chat: { completions: { create: mockCreate } },
-      embeddings: {
-        create: vi.fn().mockResolvedValue({
-          data: [{ embedding: makeMockEmbedding(), index: 0, object: "embedding" }],
-          model: "text-embedding-3-small",
-          object: "list",
-          usage: { prompt_tokens: 1, total_tokens: 1 },
-        }),
-      },
     } as unknown as OpenAI,
     mockCreate,
   };

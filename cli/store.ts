@@ -127,7 +127,20 @@ export function searchNodesByVector(
   segment?: string,
 ): DumpNode[] {
   try {
-    const candidates = db
+    if (segment) {
+      const rows = db
+        .prepare(
+          `SELECT nodes.* FROM nodes_vec
+           JOIN nodes ON nodes.rowid = nodes_vec.rowid
+           WHERE nodes_vec.embedding MATCH ?
+           AND k = ?
+           AND nodes.segment = ?
+           ORDER BY distance`,
+        )
+        .all(JSON.stringify(embedding), limit, segment) as NodeRow[];
+      return rows.map(rowToNode);
+    }
+    const rows = db
       .prepare(
         `SELECT nodes.* FROM nodes_vec
          JOIN nodes ON nodes.rowid = nodes_vec.rowid
@@ -135,9 +148,8 @@ export function searchNodesByVector(
          AND k = ?
          ORDER BY distance`,
       )
-      .all(JSON.stringify(embedding), limit * 3) as NodeRow[];
-    const filtered = segment ? candidates.filter((r) => r.segment === segment) : candidates;
-    return filtered.slice(0, limit).map(rowToNode);
+      .all(JSON.stringify(embedding), limit) as NodeRow[];
+    return rows.map(rowToNode);
   } catch {
     return [];
   }
