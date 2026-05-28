@@ -87,8 +87,8 @@ function rowToNode(row: NodeRow): DumpNode {
   };
 }
 
-export function insertNode(db: Db, node: DumpNode): void {
-  db.prepare(
+export function insertNode(db: Db, node: DumpNode): bigint {
+  const result = db.prepare(
     `INSERT INTO nodes (
       id, tag, content, parent_id, captured_at,
       memory_date, memory_date_granularity, segment, depth
@@ -107,18 +107,22 @@ export function insertNode(db: Db, node: DumpNode): void {
     segment: node.segment,
     depth: node.depth,
   });
+  return BigInt(result.lastInsertRowid);
 }
 
-// TODO: accept rowid directly (from insertNode's lastInsertRowid) to avoid this SELECT
+export function insertEmbeddingByRowid(db: Db, rowid: bigint, embedding: number[]): void {
+  db.prepare("INSERT INTO nodes_vec(rowid, embedding) VALUES (?, ?)").run(
+    rowid,
+    JSON.stringify(embedding),
+  );
+}
+
 export function insertEmbedding(db: Db, nodeId: string, embedding: number[]): void {
   const row = db
     .prepare("SELECT rowid FROM nodes WHERE id = ?")
     .get(nodeId) as { rowid: number } | undefined;
   if (!row) return;
-  db.prepare("INSERT INTO nodes_vec(rowid, embedding) VALUES (?, ?)").run(
-    BigInt(row.rowid),
-    JSON.stringify(embedding),
-  );
+  insertEmbeddingByRowid(db, BigInt(row.rowid), embedding);
 }
 
 export function searchNodesByVector(

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
-import { type Db, getNodeById, getNodeCount, getRecentNodes, insertEmbedding, insertNode, searchNodes, searchNodesByVector } from "./store.js";
+import { type Db, getNodeById, getNodeCount, getRecentNodes, insertEmbeddingByRowid, insertNode, searchNodes, searchNodesByVector } from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
 export interface SegmentConfig {
@@ -247,9 +247,9 @@ export async function runTurn(
       depth: parentNode ? parentNode.depth + 1 : 0,
     };
 
-    insertNode(state.db, node);
+    const rowid = insertNode(state.db, node);
     if (userEmbedding !== null) {
-      insertEmbedding(state.db, node.id, userEmbedding);
+      insertEmbeddingByRowid(state.db, rowid, userEmbedding);
     }
     state.lastParentId = node.id;
 

@@ -11,6 +11,7 @@ import {
   getTagCounts,
   importFromJson,
   insertEmbedding,
+  insertEmbeddingByRowid,
   insertNode,
   openDb,
   searchNodes,
@@ -337,6 +338,17 @@ describe("importFromJson", () => {
     };
     expect(() => importFromJson(db, legacy)).not.toThrow();
     expect(getNodeCount(db)).toBe(2);
+  });
+});
+
+describe("insertEmbeddingByRowid", () => {
+  const vec = new Array(1536).fill(0.1);
+
+  it("stores embedding via rowid and makes node retrievable by vector search", () => {
+    const rowid = insertNode(db, makeNode({ id: "r1" }));
+    insertEmbeddingByRowid(db, rowid, vec);
+    const results = searchNodesByVector(db, vec, 5);
+    expect(results.map((n) => n.id)).toContain("r1");
   });
 });
 
