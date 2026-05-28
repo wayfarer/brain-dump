@@ -24,7 +24,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY)("live runTurn", () => {
     "extracts a memory node from a first-person memory statement",
     async () => {
       const client = new OpenAI();
-      const state: InterviewState = { history: [], db, lastParentId: null };
+      const state: InterviewState = { history: [], db, lastParentId: null, segment: "life_story" };
 
       await runTurn(
         client,

@@ -60,10 +60,30 @@ function toolCallChunk(index: number, id: string, name: string, args: string): C
   };
 }
 
+function makeMockEmbedding(): number[] {
+  return new Array(1536).fill(0);
+}
+
+function makeMockOpenAI() {
+  return {
+    embeddings: {
+      create: vi.fn().mockResolvedValue({
+        data: [{ embedding: makeMockEmbedding(), index: 0, object: "embedding" }],
+        model: "text-embedding-3-small",
+        object: "list",
+        usage: { prompt_tokens: 1, total_tokens: 1 },
+      }),
+    },
+  } as unknown as OpenAI;
+}
+
 function makeMockClient(chunks: Chunk[]) {
   const mockCreate = vi.fn().mockResolvedValue(makeStream(chunks));
   return {
-    client: { chat: { completions: { create: mockCreate } } } as unknown as OpenAI,
+    client: {
+      ...makeMockOpenAI(),
+      chat: { completions: { create: mockCreate } },
+    } as unknown as OpenAI,
     mockCreate,
   };
 }
@@ -103,40 +123,44 @@ function makeState(): InterviewState {
 // --- buildSystemPrompt ---
 
 describe("buildSystemPrompt", () => {
-  it("returns base prompt when db is empty", () => {
-    const prompt = buildSystemPrompt(db, "life_story");
+  it("returns base prompt when db is empty", async () => {
+    const openai = makeMockOpenAI();
+    const prompt = await buildSystemPrompt(db, openai, "life_story");
     expect(prompt).toContain("warm, patient interviewer");
     expect(prompt).not.toContain("Context from previous sessions");
   });
 
-  it("includes context block with last 10 nodes when db has 11 nodes", () => {
+  it("includes context block with last 10 nodes when db has 11 nodes", async () => {
+    const openai = makeMockOpenAI();
     for (let i = 0; i < 11; i++) {
       insertNode(db, makeNode({ id: `n${i}`, tag: `tag-${i}`, capturedAt: i }));
     }
-    const prompt = buildSystemPrompt(db, "life_story");
+    const prompt = await buildSystemPrompt(db, openai, "life_story");
     expect(prompt).toContain("tag-10");
     expect(prompt).not.toContain("tag-0");
     const matches = prompt.match(/depth \d/g) ?? [];
     expect(matches).toHaveLength(10);
   });
 
-  it("prioritises FTS-matched nodes when recentInput is provided", () => {
+  it("prioritises search-matched nodes when recentInput is provided", async () => {
+    // Mock returns a zero vector — no embeddings stored, so vector search returns empty,
+    // falling back to FTS5 which surfaces the "grandmother" node.
+    const openai = makeMockOpenAI();
     insertNode(db, makeNode({ id: "old", tag: "distant memory", content: "grandmother in the garden", capturedAt: 1 }));
     for (let i = 0; i < 10; i++) {
       insertNode(db, makeNode({ id: `new${i}`, tag: `recent-${i}`, content: "daily routine stuff", capturedAt: 1000 + i }));
     }
-    // Without recentInput, "distant memory" is too old to appear in last 10
-    const promptWithout = buildSystemPrompt(db, "life_story");
+    const promptWithout = await buildSystemPrompt(db, openai, "life_story");
     expect(promptWithout).not.toContain("distant memory");
-    // With recentInput matching "grandmother", it surfaces
-    const promptWith = buildSystemPrompt(db, "life_story", "I was with my grandmother");
+    const promptWith = await buildSystemPrompt(db, openai, "life_story", "I was with my grandmother");
     expect(promptWith).toContain("distant memory");
   });
 
-  it("only surfaces nodes from the active segment", () => {
+  it("only surfaces nodes from the active segment", async () => {
+    const openai = makeMockOpenAI();
     insertNode(db, makeNode({ id: "ls", tag: "life memory", content: "the old house", capturedAt: 1, segment: "life_story" }));
     insertNode(db, makeNode({ id: "dj", tag: "dream vision", content: "flying over water", capturedAt: 2, segment: "dream_journal" }));
-    const prompt = buildSystemPrompt(db, "dream_journal");
+    const prompt = await buildSystemPrompt(db, openai, "dream_journal");
     expect(prompt).toContain("dream vision");
     expect(prompt).not.toContain("life memory");
   });
@@ -286,6 +310,24 @@ describe("runTurn", () => {
       (m) => m.role === "tool",
     ) as OpenAI.Chat.ChatCompletionToolMessageParam | undefined;
     expect(toolMsg?.content).toBe("error: invalid json");
+  });
+
+  it("two simultaneous tool calls: both nodes persisted, both tool messages in history", async () => {
+    const args0 = JSON.stringify({ tag: "quiet joy", content: "the morning light", parentId: "" });
+    const args1 = JSON.stringify({ tag: "sudden loss", content: "the empty chair", parentId: "" });
+    const { client } = makeMockClient([
+      toolCallChunk(0, "call_a", "extract_memory_node", args0),
+      toolCallChunk(1, "call_b", "extract_memory_node", args1),
+    ]);
+    const state = makeState();
+    await runTurn(client, state, "two things happened");
+
+    expect(getNodeCount(db)).toBe(2);
+    const toolMsgs = state.history.filter(
+      (m) => m.role === "tool",
+    ) as OpenAI.Chat.ChatCompletionToolMessageParam[];
+    expect(toolMsgs).toHaveLength(2);
+    expect(toolMsgs.every((m) => m.content === "ok")).toBe(true);
   });
 
   it("content + tool call: assistant entry has both content and tool_calls", async () => {

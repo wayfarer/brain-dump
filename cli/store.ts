@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 
 import Database from "better-sqlite3";
+import OpenAI from "openai";
+import * as sqliteVec from "sqlite-vec";
 
 import type { DumpNode, DumpRecord, MemoryDateGranularity } from "./types.js";
 
@@ -42,6 +44,10 @@ CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
   INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES('delete', old.rowid, old.content);
   INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_vec USING vec0(
+  embedding float[1536]
+);
 `;
 
 export type Db = Database.Database;
@@ -50,6 +56,7 @@ export function openDb(path: string = DEFAULT_DB_PATH): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  sqliteVec.load(db);
   db.exec(SCHEMA);
   return db;
 }
@@ -100,6 +107,65 @@ export function insertNode(db: Db, node: DumpNode): void {
     segment: node.segment,
     depth: node.depth,
   });
+}
+
+// TODO: accept rowid directly (from insertNode's lastInsertRowid) to avoid this SELECT
+export function insertEmbedding(db: Db, nodeId: string, embedding: number[]): void {
+  const row = db
+    .prepare("SELECT rowid FROM nodes WHERE id = ?")
+    .get(nodeId) as { rowid: number } | undefined;
+  if (!row) return;
+  db.prepare("INSERT INTO nodes_vec(rowid, embedding) VALUES (?, ?)").run(
+    BigInt(row.rowid),
+    JSON.stringify(embedding),
+  );
+}
+
+export function searchNodesByVector(
+  db: Db,
+  embedding: number[],
+  limit: number,
+  segment?: string,
+): DumpNode[] {
+  try {
+    if (segment) {
+      const rows = db
+        .prepare(
+          `SELECT nodes.* FROM nodes_vec
+           JOIN nodes ON nodes.rowid = nodes_vec.rowid
+           WHERE nodes_vec.embedding MATCH ?
+           AND k = ?
+           AND nodes.segment = ?
+           ORDER BY distance`,
+        )
+        .all(JSON.stringify(embedding), limit, segment) as NodeRow[];
+      return rows.map(rowToNode);
+    }
+    const rows = db
+      .prepare(
+        `SELECT nodes.* FROM nodes_vec
+         JOIN nodes ON nodes.rowid = nodes_vec.rowid
+         WHERE nodes_vec.embedding MATCH ?
+         AND k = ?
+         ORDER BY distance`,
+      )
+      .all(JSON.stringify(embedding), limit) as NodeRow[];
+    return rows.map(rowToNode);
+  } catch {
+    return [];
+  }
+}
+
+export async function storeEmbedding(db: Db, openai: OpenAI, node: DumpNode): Promise<void> {
+  try {
+    const response = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: node.content,
+    });
+    insertEmbedding(db, node.id, response.data[0].embedding);
+  } catch {
+    // Graceful degradation: node exists in `nodes` and is reachable via FTS5 / getRecentNodes.
+  }
 }
 
 export function getNodeById(db: Db, id: string): DumpNode | null {

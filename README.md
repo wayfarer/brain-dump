@@ -78,13 +78,31 @@ The CLI is the primary capture interface. The web app is a splash; a graph/timel
 
 ## Running
 
+### Install
+
 ```sh
-npm run dump                          # Start a life_story session (default)
-npm run dump -- --segment dream_journal  # Start a dream_journal session
-npm test                              # Run the test suite (CLI unit + integration)
+npm install && npm link   # exposes `braindump` in your PATH
+```
+
+Then from anywhere:
+
+```sh
+braindump                             # Start a life_story session (default)
+braindump --segment dream_journal     # Start a dream_journal session
+```
+
+Or without installing, from inside the project:
+
+```sh
+npm run dump
+npm run dump -- --segment dream_journal
 ```
 
 Requires `OPENAI_API_KEY` in `.env` (see `.env.example`).
+
+```sh
+npm test                              # Run the test suite
+```
 
 ### Segments
 
