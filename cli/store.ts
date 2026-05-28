@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 
 import Database from "better-sqlite3";
-import OpenAI from "openai";
 import * as sqliteVec from "sqlite-vec";
 
 import type { DumpNode, DumpRecord, MemoryDateGranularity } from "./types.js";
@@ -160,17 +159,6 @@ export function searchNodesByVector(
   }
 }
 
-export async function storeEmbedding(db: Db, openai: OpenAI, node: DumpNode): Promise<void> {
-  try {
-    const response = await openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: node.content,
-    });
-    insertEmbedding(db, node.id, response.data[0].embedding);
-  } catch {
-    // Graceful degradation: node exists in `nodes` and is reachable via FTS5 / getRecentNodes.
-  }
-}
 
 export function getNodeById(db: Db, id: string): DumpNode | null {
   const row = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id) as NodeRow | undefined;

@@ -130,11 +130,18 @@ async function main(): Promise<void> {
 
       rl.pause();
       console.log();
-      await runTurn(client, state, input);
-      console.log();
+      try {
+        await runTurn(client, state, input);
+      } finally {
+        console.log();
+        rl.resume();
+        rl.prompt();
+      }
+    }).catch((err: unknown) => {
+      console.error("\nError:", err instanceof Error ? err.message : String(err));
       rl.resume();
       rl.prompt();
-    }).catch(() => {});
+    });
   });
 
   rl.on("close", () => {
