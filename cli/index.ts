@@ -59,87 +59,92 @@ async function main(): Promise<void> {
 
   rl.prompt();
 
-  rl.on("line", async (line) => {
-    const input = line.trim();
-    if (!input) {
-      rl.prompt();
-      return;
-    }
+  let turnLock: Promise<void> = Promise.resolve();
 
-    if (input === "/exit") {
-      rl.close();
-      return;
-    }
-
-    if (input === "/list" || input.startsWith("/list ")) {
-      const arg = input.slice(5).trim();
-      const limit = Math.max(1, parseInt(arg, 10) || 10);
-      console.log();
-      const nodes = getRecentNodes(db, limit);
-      if (nodes.length === 0) {
-        console.log("No nodes captured yet.");
-      } else {
-        for (const node of nodes) {
-          const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
-          const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
-          console.log(`  "${node.tag}"${date} — ${preview}`);
-        }
+  rl.on("line", (line) => {
+    turnLock = turnLock.then(async () => {
+      const input = line.trim();
+      if (!input) {
+        rl.prompt();
+        return;
       }
-      console.log();
-      rl.prompt();
-      return;
-    }
 
-    if (input === "/tags") {
-      console.log();
-      const counts = getTagCounts(db);
-      if (counts.length === 0) {
-        console.log("No tags yet.");
-      } else {
-        for (const { tag, count } of counts) {
-          console.log(`  "${tag}" × ${count}`);
-        }
+      if (input === "/exit") {
+        rl.close();
+        return;
       }
-      console.log();
-      rl.prompt();
-      return;
-    }
 
-    if (input.startsWith("/search ")) {
-      const query = input.slice(8).trim();
-      console.log();
-      if (query) {
-        const results = searchNodes(db, query, 10);
-        if (results.length === 0) {
-          console.log("No matches found.");
+      if (input === "/list" || input.startsWith("/list ")) {
+        const arg = input.slice(5).trim();
+        const limit = Math.max(1, parseInt(arg, 10) || 10);
+        console.log();
+        const nodes = getRecentNodes(db, limit);
+        if (nodes.length === 0) {
+          console.log("No nodes captured yet.");
         } else {
-          for (const node of results) {
+          for (const node of nodes) {
             const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
             const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
             console.log(`  "${node.tag}"${date} — ${preview}`);
           }
         }
+        console.log();
+        rl.prompt();
+        return;
       }
-      console.log();
-      rl.prompt();
-      return;
-    }
 
-    rl.pause();
-    console.log();
-    await runTurn(client, state, input);
-    console.log();
-    rl.resume();
-    rl.prompt();
+      if (input === "/tags") {
+        console.log();
+        const counts = getTagCounts(db);
+        if (counts.length === 0) {
+          console.log("No tags yet.");
+        } else {
+          for (const { tag, count } of counts) {
+            console.log(`  "${tag}" × ${count}`);
+          }
+        }
+        console.log();
+        rl.prompt();
+        return;
+      }
+
+      if (input.startsWith("/search ")) {
+        const query = input.slice(8).trim();
+        console.log();
+        if (query) {
+          const results = searchNodes(db, query, 10);
+          if (results.length === 0) {
+            console.log("No matches found.");
+          } else {
+            for (const node of results) {
+              const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
+              const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
+              console.log(`  "${node.tag}"${date} — ${preview}`);
+            }
+          }
+        }
+        console.log();
+        rl.prompt();
+        return;
+      }
+
+      rl.pause();
+      console.log();
+      await runTurn(client, state, input);
+      console.log();
+      rl.resume();
+      rl.prompt();
+    }).catch(() => {});
   });
 
-  const exit = () => {
-    db.close();
-    console.log("\n\nSession saved. See you next time.\n");
-    process.exit(0);
-  };
+  rl.on("close", () => {
+    void turnLock.then(() => {
+      db.close();
+      console.log("\n\nSession saved. See you next time.\n");
+      process.exit(0);
+    });
+  });
 
-  rl.on("close", exit);
   process.on("SIGINT", () => rl.close());
 }
 
