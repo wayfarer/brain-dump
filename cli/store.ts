@@ -109,6 +109,7 @@ export function insertNode(db: Db, node: DumpNode): void {
   });
 }
 
+// TODO: accept rowid directly (from insertNode's lastInsertRowid) to avoid this SELECT
 export function insertEmbedding(db: Db, nodeId: string, embedding: number[]): void {
   const row = db
     .prepare("SELECT rowid FROM nodes WHERE id = ?")

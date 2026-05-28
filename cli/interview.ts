@@ -106,6 +106,7 @@ export async function buildSystemPrompt(
     let searchResults: DumpNode[] = [];
 
     // Try vector search first; fall back to FTS5.
+    // TODO: thread this embedding through to storeEmbedding to avoid the duplicate call per turn
     try {
       const response = await openai.embeddings.create({
         model: "text-embedding-3-small",
@@ -235,6 +236,7 @@ export async function runTurn(
     };
 
     insertNode(state.db, node);
+    // TODO: if db.close() races this promise (e.g. /exit typed immediately), the write silently fails
     storeEmbedding(state.db, client, node).catch(() => {});
     state.lastParentId = node.id;
 
