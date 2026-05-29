@@ -90,6 +90,22 @@ export interface InterviewState {
   segment: string;
 }
 
+/**
+ * Optional presentation hooks for a turn. When omitted, `runTurn` falls back to
+ * writing the AI response straight to stdout (its original behavior), so tests
+ * and non-interactive callers need no presenter.
+ */
+export interface TurnPresenter {
+  /** Fired once, just before the first response output appears (stop the spinner). */
+  onFirstToken?(): void;
+  /** Each streamed content chunk. Defaults to `process.stdout.write`. */
+  onContent?(text: string): void;
+  /** A memory node was persisted. */
+  onNodeSaved?(tag: string): void;
+  /** A tool call produced unparseable arguments; no node was saved. */
+  onNodeError?(): void;
+}
+
 export async function buildSystemPrompt(
   db: Db,
   openai: OpenAI,
@@ -160,6 +176,7 @@ export async function runTurn(
   client: OpenAI,
   state: InterviewState,
   userInput: string,
+  presenter?: TurnPresenter,
 ): Promise<void> {
   let userEmbedding: number[] | null = null;
   try {
@@ -180,12 +197,21 @@ export async function runTurn(
   });
 
   let fullContent = "";
+  let firstTokenFired = false;
   const toolCalls: Array<{ index: number; id: string; name: string; arguments: string }> = [];
 
   for await (const chunk of stream) {
     const delta = chunk.choices[0]?.delta;
     if (delta?.content) {
-      process.stdout.write(delta.content);
+      if (!firstTokenFired) {
+        firstTokenFired = true;
+        presenter?.onFirstToken?.();
+      }
+      if (presenter?.onContent) {
+        presenter.onContent(delta.content);
+      } else {
+        process.stdout.write(delta.content);
+      }
       fullContent += delta.content;
     }
     if (delta?.tool_calls) {
@@ -198,6 +224,10 @@ export async function runTurn(
         if (tc.function?.arguments) toolCalls[tc.index].arguments += tc.function.arguments;
       }
     }
+  }
+  // Ensure the spinner is cleared even on a tool-call-only turn (no content).
+  if (!firstTokenFired) {
+    presenter?.onFirstToken?.();
   }
   process.stdout.write("\n");
 
@@ -227,6 +257,7 @@ export async function runTurn(
       args = JSON.parse(tc.arguments) as typeof args;
     } catch {
       state.history.push({ role: "tool", tool_call_id: tc.id, content: "error: invalid json" });
+      presenter?.onNodeError?.();
       continue;
     }
 
@@ -253,6 +284,7 @@ export async function runTurn(
     }
     state.lastParentId = node.id;
 
+    presenter?.onNodeSaved?.(node.tag);
     state.history.push({ role: "tool", tool_call_id: tc.id, content: "ok" });
   }
 }
