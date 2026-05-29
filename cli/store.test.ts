@@ -139,6 +139,16 @@ describe("getTagCounts", () => {
     expect(counts[0].count).toBe(3);
     expect(counts[1].tag).toBe("fierce belonging");
   });
+
+  it("counts only the matching segment when filtered", () => {
+    insertNode(db, makeNode({ id: "a", tag: "quiet joy", segment: "life_story" }));
+    insertNode(db, makeNode({ id: "b", tag: "quiet joy", segment: "life_story" }));
+    insertNode(db, makeNode({ id: "c", tag: "lucid flight", segment: "dream_journal" }));
+    const counts = getTagCounts(db, "life_story");
+    expect(counts).toHaveLength(1);
+    expect(counts[0].tag).toBe("quiet joy");
+    expect(counts[0].count).toBe(2);
+  });
 });
 
 describe("getNodeCount", () => {
@@ -198,6 +208,13 @@ describe("searchNodes", () => {
     insertNode(db, makeNode({ id: "a", content: "the big red bus" }));
     const results = searchNodes(db, "my the in", 5);
     expect(results).toHaveLength(0);
+  });
+
+  it("filters by segment when provided", () => {
+    insertNode(db, makeNode({ id: "a", content: "grandmother story", segment: "life_story" }));
+    insertNode(db, makeNode({ id: "b", content: "grandmother story", segment: "dream_journal" }));
+    const results = searchNodes(db, "grandmother", 5, "life_story");
+    expect(results.map((n) => n.id)).toEqual(["a"]);
   });
 
   it("respects the limit argument", () => {
