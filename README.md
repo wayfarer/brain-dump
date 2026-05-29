@@ -115,11 +115,12 @@ Each session writes only to its own segment. Context surfaced to the interviewer
 
 ### REPL commands
 
-During a session, lines starting with `/` are handled locally without calling the LLM:
+During a session, lines starting with `/` are handled locally without calling the LLM. Commands that read back nodes (`/search`, `/list`, `/tags`) are scoped to the active segment. An unrecognized `/` command prints a hint rather than being sent to the LLM.
 
 | Command | Description |
 |---|---|
-| `/search <query>` | Full-text search across all captured nodes. Prints matching nodes with their tag, memory date (if known), and a content preview. |
-| `/list [n]` | Show the `n` most recent captured nodes (default 10). |
-| `/tags` | List all tags with occurrence counts, sorted by frequency. |
+| `/search <query>` | Full-text search across captured nodes in the active segment. Prints matching nodes with their tag, memory date (if known), and a content preview. |
+| `/list [n]` | Show the `n` most recent captured nodes in the active segment (default 10). |
+| `/tags` | List the active segment's tags with occurrence counts, sorted by frequency. |
+| `/help` | Show the list of available commands. |
 | `/exit` | End the session (equivalent to Ctrl+C). |

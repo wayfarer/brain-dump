@@ -6,10 +6,17 @@ import * as readline from "node:readline";
 import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn, SEGMENTS } from "./interview.js";
-import type { InterviewState } from "./interview.js";
+import type { InterviewState, TurnPresenter } from "./interview.js";
 import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
+import { banner, c, formatNodeLine, savedErrorLine, savedLine, Spinner } from "./ui.js";
 import type { DumpRecord } from "./types.js";
+
+const HELP = `  ${c.cyan("/list")} ${c.dim("[n]")}        recent memories (default 10)
+  ${c.cyan("/tags")}            tags with counts
+  ${c.cyan("/search")} ${c.dim("<query>")}  full-text search
+  ${c.cyan("/help")}            show this help
+  ${c.cyan("/exit")}            save and quit`;
 
 async function main(): Promise<void> {
   if (!process.env.OPENAI_API_KEY) {
@@ -47,14 +54,15 @@ async function main(): Promise<void> {
     segment,
   };
 
-  console.log(`\nBrain Dump${segment !== "life_story" ? `  [${segment}]` : ""}\n`);
+  console.log(banner(segment));
   console.log(buildOpeningMessage(db, segment));
+  console.log(c.dim("Type /help for commands."));
   console.log();
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "> ",
+    prompt: c.cyan("> "),
   });
 
   rl.prompt();
@@ -74,18 +82,24 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (input === "/help") {
+        console.log();
+        console.log(HELP);
+        console.log();
+        rl.prompt();
+        return;
+      }
+
       if (input === "/list" || input.startsWith("/list ")) {
         const arg = input.slice(5).trim();
         const limit = Math.max(1, parseInt(arg, 10) || 10);
         console.log();
-        const nodes = getRecentNodes(db, limit);
+        const nodes = getRecentNodes(db, limit, segment);
         if (nodes.length === 0) {
-          console.log("No nodes captured yet.");
+          console.log(c.dim("No nodes captured yet."));
         } else {
           for (const node of nodes) {
-            const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
-            const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
-            console.log(`  "${node.tag}"${date} — ${preview}`);
+            console.log(formatNodeLine(node));
           }
         }
         console.log();
@@ -95,12 +109,12 @@ async function main(): Promise<void> {
 
       if (input === "/tags") {
         console.log();
-        const counts = getTagCounts(db);
+        const counts = getTagCounts(db, segment);
         if (counts.length === 0) {
-          console.log("No tags yet.");
+          console.log(c.dim("No tags yet."));
         } else {
           for (const { tag, count } of counts) {
-            console.log(`  "${tag}" × ${count}`);
+            console.log(`  ${c.cyan(`"${tag}"`)} ${c.dim(`× ${count}`)}`);
           }
         }
         console.log();
@@ -108,18 +122,18 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (input.startsWith("/search ")) {
-        const query = input.slice(8).trim();
+      if (input === "/search" || input.startsWith("/search ")) {
+        const query = input.slice(7).trim();
         console.log();
-        if (query) {
-          const results = searchNodes(db, query, 10);
+        if (!query) {
+          console.log(c.dim("Usage: /search <query>"));
+        } else {
+          const results = searchNodes(db, query, 10, segment);
           if (results.length === 0) {
-            console.log("No matches found.");
+            console.log(c.dim("No matches found."));
           } else {
             for (const node of results) {
-              const date = node.memoryDate ? ` [${node.memoryDate}]` : "";
-              const preview = node.content.length > 80 ? node.content.slice(0, 77) + "..." : node.content;
-              console.log(`  "${node.tag}"${date} — ${preview}`);
+              console.log(formatNodeLine(node));
             }
           }
         }
@@ -128,11 +142,27 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (input.startsWith("/")) {
+        console.log();
+        console.log(c.dim("Unknown command. Type /help for the list."));
+        console.log();
+        rl.prompt();
+        return;
+      }
+
       rl.pause();
       console.log();
+      const spinner = new Spinner();
+      const presenter: TurnPresenter = {
+        onFirstToken: () => spinner.stop(),
+        onNodeSaved: (tag) => console.log(savedLine(tag)),
+        onNodeError: () => console.log(savedErrorLine()),
+      };
+      spinner.start("thinking…");
       try {
-        await runTurn(client, state, input);
+        await runTurn(client, state, input, presenter);
       } finally {
+        spinner.stop();
         console.log();
         rl.resume();
         rl.prompt();
