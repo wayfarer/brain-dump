@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as readline from "node:readline";
 
@@ -7,11 +7,38 @@ import OpenAI from "openai";
 
 import { buildOpeningMessage, runTurn, SEGMENTS } from "./interview.js";
 import type { InterviewState } from "./interview.js";
-import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
+import {
+  exportToJson,
+  getNodeCount,
+  getRecentNodes,
+  getTagCounts,
+  importFromJson,
+  openDb,
+  searchNodes,
+} from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
 import type { DumpRecord } from "./types.js";
 
+function runExport(outPath: string): void {
+  const db = openDb();
+  const record = exportToJson(db);
+  writeFileSync(outPath, JSON.stringify(record, null, 2) + "\n", "utf-8");
+  db.close();
+  console.log(`Exported ${record.nodes.length} node${record.nodes.length !== 1 ? "s" : ""} to ${outPath}`);
+}
+
 async function main(): Promise<void> {
+  const exportFlagIdx = process.argv.indexOf("--export");
+  if (exportFlagIdx !== -1) {
+    const nextArg = process.argv[exportFlagIdx + 1];
+    const outPath = resolve(
+      process.cwd(),
+      nextArg && !nextArg.startsWith("-") ? nextArg : "dump-export.json",
+    );
+    runExport(outPath);
+    return;
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     console.error(
       "Error: OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.",
