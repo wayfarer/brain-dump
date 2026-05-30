@@ -5,6 +5,7 @@ import * as readline from "node:readline";
 
 import OpenAI from "openai";
 
+import { createSession, type BackendPreference, type ChatSession } from "./backends/index.js";
 import { buildOpeningMessage, runTurn, SEGMENTS } from "./interview.js";
 import type { InterviewState } from "./interview.js";
 import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
@@ -12,13 +13,6 @@ import type { LegacyDumpRecord } from "./store.js";
 import type { DumpRecord } from "./types.js";
 
 async function main(): Promise<void> {
-  if (!process.env.OPENAI_API_KEY) {
-    console.error(
-      "Error: OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.",
-    );
-    process.exit(1);
-  }
-
   const segmentFlagIdx = process.argv.indexOf("--segment");
   const segmentArg = segmentFlagIdx !== -1 ? (process.argv[segmentFlagIdx + 1] ?? "") : "life_story";
   if (!SEGMENTS[segmentArg]) {
@@ -26,6 +20,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const segment = segmentArg;
+
+  const backendFlagIdx = process.argv.indexOf("--backend");
+  const backendArg =
+    (backendFlagIdx !== -1 ? process.argv[backendFlagIdx + 1] : process.env.BRAINDUMP_BACKEND) ?? "auto";
+  if (!["auto", "codex", "openai"].includes(backendArg)) {
+    console.error(`Unknown backend "${backendArg}". Available: auto, codex, openai`);
+    process.exit(1);
+  }
+  const preference = backendArg as BackendPreference;
 
   const db = openDb();
 
@@ -37,17 +40,33 @@ async function main(): Promise<void> {
     console.log(`Migrated ${count} node${count !== 1 ? "s" : ""} from dump.json.\n`);
   }
 
-  const client = new OpenAI();
-  const lastNode = getRecentNodes(db, 1, segment)[0];
+  const client = process.env.OPENAI_API_KEY ? new OpenAI() : null;
 
+  let session: ChatSession;
+  let primaryName: "codex" | "openai";
+  try {
+    ({ session, primaryName } = await createSession({ preference, openai: client }));
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    db.close();
+    process.exit(1);
+  }
+
+  const lastNode = getRecentNodes(db, 1, segment)[0];
   const state: InterviewState = {
-    history: [],
     db,
     lastParentId: lastNode?.id ?? null,
     segment,
   };
 
+  const authLine =
+    primaryName === "codex"
+      ? client
+        ? "Codex subscription · API-key fallback"
+        : "Codex subscription"
+      : "OpenAI API key";
   console.log(`\nBrain Dump${segment !== "life_story" ? `  [${segment}]` : ""}\n`);
+  console.log(`· ${authLine}\n`);
   console.log(buildOpeningMessage(db, segment));
   console.log();
 
@@ -131,7 +150,7 @@ async function main(): Promise<void> {
       rl.pause();
       console.log();
       try {
-        await runTurn(client, state, input);
+        await runTurn(session, client, state, input);
       } finally {
         console.log();
         rl.resume();
@@ -146,6 +165,7 @@ async function main(): Promise<void> {
 
   rl.on("close", () => {
     void turnLock.then(() => {
+      session.close();
       db.close();
       console.log("\n\nSession saved. See you next time.\n");
       process.exit(0);

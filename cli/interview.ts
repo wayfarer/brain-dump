@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import OpenAI from "openai";
 
+import type { ChatSession } from "./backends/index.js";
+import type { ExtractedNode } from "./backends/types.js";
 import { type Db, getNodeById, getNodeCount, getRecentNodes, insertEmbeddingByRowid, insertNode, searchNodes, searchNodesByVector } from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
@@ -24,52 +26,10 @@ export const SEGMENTS: Record<string, SegmentConfig> = {
   },
 };
 
-const EXTRACT_NODE_TOOL: OpenAI.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "extract_memory_node",
-    description:
-      "Call this silently whenever the user shares a memory or emotional experience worth preserving. " +
-      "Do not mention this tool to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        tag: {
-          type: "string",
-          description:
-            '1–4 word emotional/experiential label. Lowercase. ' +
-            'Examples: "wonder and curiosity", "quiet shame", "sudden loss", "fierce belonging". ' +
-            'Never use generic words like "memory" or "experience".',
-        },
-        content: {
-          type: "string",
-          description: "The user's exact response text that prompted this extraction.",
-        },
-        parentId: {
-          type: "string",
-          description:
-            'id of the parent DumpNode, or empty string "" if this is a root memory.',
-        },
-        memoryDate: {
-          type: "string",
-          description:
-            "When the memory occurred. Use ISO format when precise (\"2003-03-15\", \"1987-06\", \"1987\"), " +
-            "or a descriptive string when vague (\"early 1980s\", \"summer of my childhood\"). Omit if unknown.",
-        },
-        memoryDateGranularity: {
-          type: "string",
-          enum: ["decade", "year", "season", "month", "date", "datetime"],
-          description:
-            "How precisely the date is known. " +
-            "decade: only the decade is known; year: a specific year; season: season of a year; " +
-            "month: month and year; date: full date; datetime: date and time.",
-        },
-      },
-      required: ["tag", "content", "parentId"],
-    },
-  },
-};
-
+/**
+ * Shared interviewer rules, free of any extraction-mechanism wording. Each
+ * backend appends its own tail (OpenAI: a function tool; Codex: a JSON contract).
+ */
 const BASE_SYSTEM_PROMPT = `You are a warm, patient interviewer conducting a gentle memory archaeology session.
 Your only job is to ask one focused follow-up question per turn.
 
@@ -79,12 +39,11 @@ Rules:
 - Do not interpret, analyze, or reflect emotions back. Just ask.
 - No filler phrases ("That's interesting", "Thank you for sharing").
 - Vary your approach: zoom in on a detail, ask about a person, ask what came just before or after, ask how old they were.
-- When the user shares a memory worth preserving, call extract_memory_node silently before writing your question. Do not mention it.
-- In extract_memory_node, always include memoryDate and memoryDateGranularity when the user gives any time clue — age, grade, season, decade, or year. Estimate conservatively when unsure (e.g., a stated age + known birth year → specific year).
 - Never break character. Never explain yourself.`;
 
+const VALID_GRANULARITIES = new Set<string>(["decade", "year", "season", "month", "date", "datetime"]);
+
 export interface InterviewState {
-  history: OpenAI.Chat.ChatCompletionMessageParam[];
   db: Db;
   lastParentId: string | null;
   segment: string;
@@ -92,7 +51,7 @@ export interface InterviewState {
 
 export async function buildSystemPrompt(
   db: Db,
-  openai: OpenAI,
+  openai: OpenAI | null,
   segment: string,
   recentInput?: string,
   recentEmbedding?: number[],
@@ -108,17 +67,17 @@ export async function buildSystemPrompt(
 
     // Try vector search first; fall back to FTS5.
     try {
-      let embedding: number[];
-      if (recentEmbedding) {
-        embedding = recentEmbedding;
-      } else {
+      let embedding: number[] | undefined = recentEmbedding;
+      if (!embedding && openai) {
         const response = await openai.embeddings.create({
           model: "text-embedding-3-small",
           input: recentInput,
         });
         embedding = response.data[0].embedding;
       }
-      searchResults = searchNodesByVector(db, embedding, 5, segment);
+      if (embedding) {
+        searchResults = searchNodesByVector(db, embedding, 5, segment);
+      }
     } catch {
       // ignore — fall through to FTS5
     }
@@ -156,103 +115,61 @@ export function buildOpeningMessage(db: Db, segment: string): string {
   return config.returnGreeting;
 }
 
-export async function runTurn(
-  client: OpenAI,
+/** Persist memory candidates surfaced by a backend, with the user input's embedding. */
+export function persistNodes(
+  db: Db,
   state: InterviewState,
-  userInput: string,
-): Promise<void> {
-  let userEmbedding: number[] | null = null;
-  try {
-    const r = await client.embeddings.create({ model: "text-embedding-3-small", input: userInput });
-    userEmbedding = r.data[0].embedding;
-  } catch { /* fall through — retrieval degrades to FTS5, storage skipped */ }
-
-  state.history.push({ role: "user", content: userInput });
-
-  const stream = await client.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      { role: "system", content: await buildSystemPrompt(state.db, client, state.segment, userInput, userEmbedding ?? undefined) },
-      ...state.history,
-    ],
-    tools: [EXTRACT_NODE_TOOL],
-    stream: true,
-  });
-
-  let fullContent = "";
-  const toolCalls: Array<{ index: number; id: string; name: string; arguments: string }> = [];
-
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta;
-    if (delta?.content) {
-      process.stdout.write(delta.content);
-      fullContent += delta.content;
-    }
-    if (delta?.tool_calls) {
-      for (const tc of delta.tool_calls) {
-        if (!toolCalls[tc.index]) {
-          toolCalls[tc.index] = { index: tc.index, id: "", name: "", arguments: "" };
-        }
-        if (tc.id) toolCalls[tc.index].id += tc.id;
-        if (tc.function?.name) toolCalls[tc.index].name += tc.function.name;
-        if (tc.function?.arguments) toolCalls[tc.index].arguments += tc.function.arguments;
-      }
-    }
-  }
-  process.stdout.write("\n");
-
-  const completedToolCalls = toolCalls.filter(Boolean);
-
-  state.history.push({
-    role: "assistant",
-    content: fullContent || null,
-    ...(completedToolCalls.length > 0 && {
-      tool_calls: completedToolCalls.map((tc) => ({
-        id: tc.id,
-        type: "function" as const,
-        function: { name: tc.name, arguments: tc.arguments },
-      })),
-    }),
-  });
-
-  for (const tc of completedToolCalls) {
-    let args: {
-      tag: string;
-      content: string;
-      parentId: string;
-      memoryDate?: string;
-      memoryDateGranularity?: string;
-    };
-    try {
-      args = JSON.parse(tc.arguments) as typeof args;
-    } catch {
-      state.history.push({ role: "tool", tool_call_id: tc.id, content: "error: invalid json" });
-      continue;
-    }
-
-    const VALID_GRANULARITIES = new Set<string>(["decade", "year", "season", "month", "date", "datetime"]);
-    const parentNode = args.parentId ? getNodeById(state.db, args.parentId) : null;
+  nodes: ExtractedNode[],
+  embedding: number[] | null,
+): void {
+  for (const n of nodes) {
+    const parentNode = n.parentId ? getNodeById(db, n.parentId) : null;
+    const granularity =
+      n.memoryDateGranularity && VALID_GRANULARITIES.has(n.memoryDateGranularity)
+        ? (n.memoryDateGranularity as MemoryDateGranularity)
+        : null;
     const node: DumpNode = {
       id: randomUUID(),
-      tag: args.tag,
-      content: args.content,
-      parentId: args.parentId || null,
+      tag: n.tag,
+      content: n.content,
+      parentId: n.parentId || null,
       capturedAt: Date.now(),
-      memoryDate: args.memoryDate || null,
-      memoryDateGranularity:
-        args.memoryDateGranularity && VALID_GRANULARITIES.has(args.memoryDateGranularity)
-          ? (args.memoryDateGranularity as MemoryDateGranularity)
-          : null,
+      memoryDate: n.memoryDate || null,
+      memoryDateGranularity: granularity,
       segment: state.segment,
       depth: parentNode ? parentNode.depth + 1 : 0,
     };
 
-    const rowid = insertNode(state.db, node);
-    if (userEmbedding !== null) {
-      insertEmbeddingByRowid(state.db, rowid, userEmbedding);
+    const rowid = insertNode(db, node);
+    if (embedding !== null) {
+      insertEmbeddingByRowid(db, rowid, embedding);
     }
     state.lastParentId = node.id;
-
-    state.history.push({ role: "tool", tool_call_id: tc.id, content: "ok" });
   }
+}
+
+/**
+ * Run one interview turn: embed the input (for retrieval + storage), build the
+ * system prompt, ask the active chat backend (which streams/prints its own
+ * question and handles subscription→API fallback), then persist any memories.
+ */
+export async function runTurn(
+  session: ChatSession,
+  openai: OpenAI | null,
+  state: InterviewState,
+  userInput: string,
+): Promise<void> {
+  let embedding: number[] | null = null;
+  if (openai) {
+    try {
+      const r = await openai.embeddings.create({ model: "text-embedding-3-small", input: userInput });
+      embedding = r.data[0].embedding;
+    } catch {
+      /* retrieval degrades to FTS5, storage skipped */
+    }
+  }
+
+  const systemPrompt = await buildSystemPrompt(state.db, openai, state.segment, userInput, embedding ?? undefined);
+  const result = await session.turn(userInput, systemPrompt);
+  persistNodes(state.db, state, result.nodes, embedding);
 }
