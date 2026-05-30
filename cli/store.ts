@@ -6,8 +6,9 @@ import * as sqliteVec from "sqlite-vec";
 import type { DumpNode, DumpRecord, MemoryDateGranularity } from "./types.js";
 
 const DEFAULT_DB_PATH = resolve(process.cwd(), "dump.db");
+const CURRENT_SCHEMA_VERSION = 1;
 
-const SCHEMA = `
+const CREATE_NODES_TABLE = `
 CREATE TABLE IF NOT EXISTS nodes (
   id TEXT PRIMARY KEY,
   tag TEXT NOT NULL,
@@ -19,7 +20,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   segment TEXT NOT NULL DEFAULT 'life_story',
   depth INTEGER NOT NULL
 );
+`;
 
+const CREATE_INDEXES_AND_VIRTUAL_TABLES = `
 CREATE INDEX IF NOT EXISTS idx_nodes_tag ON nodes(tag);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent_id ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_captured_at ON nodes(captured_at);
@@ -49,6 +52,54 @@ CREATE VIRTUAL TABLE IF NOT EXISTS nodes_vec USING vec0(
 );
 `;
 
+function tableExists(db: Db, name: string): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name);
+  return row !== undefined;
+}
+
+function columnExists(db: Db, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name: string;
+  }>;
+  return rows.some((row) => row.name === column);
+}
+
+function addMissingNodeColumns(db: Db): void {
+  if (!columnExists(db, "nodes", "memory_date")) {
+    db.exec("ALTER TABLE nodes ADD COLUMN memory_date TEXT");
+  }
+  if (!columnExists(db, "nodes", "memory_date_granularity")) {
+    db.exec("ALTER TABLE nodes ADD COLUMN memory_date_granularity TEXT");
+  }
+  if (!columnExists(db, "nodes", "segment")) {
+    db.exec(
+      "ALTER TABLE nodes ADD COLUMN segment TEXT NOT NULL DEFAULT 'life_story'",
+    );
+  }
+  if (!columnExists(db, "nodes", "depth")) {
+    db.exec("ALTER TABLE nodes ADD COLUMN depth INTEGER NOT NULL DEFAULT 0");
+  }
+  db.prepare(
+    "UPDATE nodes SET segment = 'life_story' WHERE segment IS NULL",
+  ).run();
+  db.prepare("UPDATE nodes SET depth = 0 WHERE depth IS NULL").run();
+}
+
+function rebuildFtsIndex(db: Db): void {
+  db.prepare("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')").run();
+}
+
+function migrateToV1(db: Db): void {
+  const hadNodes = tableExists(db, "nodes");
+  db.exec(CREATE_NODES_TABLE);
+  if (hadNodes) addMissingNodeColumns(db);
+  db.exec(CREATE_INDEXES_AND_VIRTUAL_TABLES);
+  if (hadNodes) rebuildFtsIndex(db);
+  db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
+}
+
 export type Db = Database.Database;
 
 export function openDb(path: string = DEFAULT_DB_PATH): Db {
@@ -56,7 +107,14 @@ export function openDb(path: string = DEFAULT_DB_PATH): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   sqliteVec.load(db);
-  db.exec(SCHEMA);
+  const version = db.pragma("user_version", { simple: true }) as number;
+  if (version > CURRENT_SCHEMA_VERSION) {
+    db.close();
+    throw new Error(
+      `Unsupported database schema version ${version}; this version of Brain Dump supports up to ${CURRENT_SCHEMA_VERSION}.`,
+    );
+  }
+  if (version < 1) migrateToV1(db);
   return db;
 }
 
@@ -80,46 +138,57 @@ function rowToNode(row: NodeRow): DumpNode {
     parentId: row.parent_id,
     capturedAt: row.captured_at,
     memoryDate: row.memory_date,
-    memoryDateGranularity: row.memory_date_granularity as MemoryDateGranularity | null,
+    memoryDateGranularity:
+      row.memory_date_granularity as MemoryDateGranularity | null,
     segment: row.segment,
     depth: row.depth,
   };
 }
 
 export function insertNode(db: Db, node: DumpNode): bigint {
-  const result = db.prepare(
-    `INSERT INTO nodes (
+  const result = db
+    .prepare(
+      `INSERT INTO nodes (
       id, tag, content, parent_id, captured_at,
       memory_date, memory_date_granularity, segment, depth
     ) VALUES (
       @id, @tag, @content, @parent_id, @captured_at,
       @memory_date, @memory_date_granularity, @segment, @depth
     )`,
-  ).run({
-    id: node.id,
-    tag: node.tag,
-    content: node.content,
-    parent_id: node.parentId,
-    captured_at: node.capturedAt,
-    memory_date: node.memoryDate,
-    memory_date_granularity: node.memoryDateGranularity,
-    segment: node.segment,
-    depth: node.depth,
-  });
+    )
+    .run({
+      id: node.id,
+      tag: node.tag,
+      content: node.content,
+      parent_id: node.parentId,
+      captured_at: node.capturedAt,
+      memory_date: node.memoryDate,
+      memory_date_granularity: node.memoryDateGranularity,
+      segment: node.segment,
+      depth: node.depth,
+    });
   return BigInt(result.lastInsertRowid);
 }
 
-export function insertEmbeddingByRowid(db: Db, rowid: bigint, embedding: number[]): void {
+export function insertEmbeddingByRowid(
+  db: Db,
+  rowid: bigint,
+  embedding: number[],
+): void {
   db.prepare("INSERT INTO nodes_vec(rowid, embedding) VALUES (?, ?)").run(
     rowid,
     JSON.stringify(embedding),
   );
 }
 
-export function insertEmbedding(db: Db, nodeId: string, embedding: number[]): void {
-  const row = db
-    .prepare("SELECT rowid FROM nodes WHERE id = ?")
-    .get(nodeId) as { rowid: number } | undefined;
+export function insertEmbedding(
+  db: Db,
+  nodeId: string,
+  embedding: number[],
+): void {
+  const row = db.prepare("SELECT rowid FROM nodes WHERE id = ?").get(nodeId) as
+    | { rowid: number }
+    | undefined;
   if (!row) return;
   insertEmbeddingByRowid(db, BigInt(row.rowid), embedding);
 }
@@ -159,16 +228,23 @@ export function searchNodesByVector(
   }
 }
 
-
 export function getNodeById(db: Db, id: string): DumpNode | null {
-  const row = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id) as NodeRow | undefined;
+  const row = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id) as
+    | NodeRow
+    | undefined;
   return row ? rowToNode(row) : null;
 }
 
-export function getRecentNodes(db: Db, limit: number, segment?: string): DumpNode[] {
+export function getRecentNodes(
+  db: Db,
+  limit: number,
+  segment?: string,
+): DumpNode[] {
   const rows = segment
     ? (db
-        .prepare("SELECT * FROM nodes WHERE segment = ? ORDER BY captured_at DESC LIMIT ?")
+        .prepare(
+          "SELECT * FROM nodes WHERE segment = ? ORDER BY captured_at DESC LIMIT ?",
+        )
         .all(segment, limit) as NodeRow[])
     : (db
         .prepare("SELECT * FROM nodes ORDER BY captured_at DESC LIMIT ?")
@@ -187,17 +263,23 @@ export function getTagCounts(
         )
         .all(segment)
     : db
-        .prepare("SELECT tag, COUNT(*) AS count FROM nodes GROUP BY tag ORDER BY count DESC")
+        .prepare(
+          "SELECT tag, COUNT(*) AS count FROM nodes GROUP BY tag ORDER BY count DESC",
+        )
         .all();
   return rows as Array<{ tag: string; count: number }>;
 }
 
 export function getNodeCount(db: Db, segment?: string): number {
   const row = segment
-    ? (db.prepare("SELECT COUNT(*) AS count FROM nodes WHERE segment = ?").get(segment) as {
+    ? (db
+        .prepare("SELECT COUNT(*) AS count FROM nodes WHERE segment = ?")
+        .get(segment) as {
         count: number;
       })
-    : (db.prepare("SELECT COUNT(*) AS count FROM nodes").get() as { count: number });
+    : (db.prepare("SELECT COUNT(*) AS count FROM nodes").get() as {
+        count: number;
+      });
   return row.count;
 }
 
@@ -270,7 +352,10 @@ export interface LegacyDumpRecord {
   }>;
 }
 
-export function importFromJson(db: Db, record: DumpRecord | LegacyDumpRecord): number {
+export function importFromJson(
+  db: Db,
+  record: DumpRecord | LegacyDumpRecord,
+): number {
   let nodes: DumpNode[];
 
   if (record.version === 1) {
