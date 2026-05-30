@@ -96,12 +96,35 @@ Import happens automatically on first startup: place a v1 or v2 JSON file at `./
 ## Layout
 
 ```
-cli/      Interview REPL — OpenAI streaming + tool-call node extraction
+cli/      Interview REPL — Codex-subscription or OpenAI chat backend, node extraction
+cli/backends/  Chat-backend seam: Codex app-server, OpenAI API, fallback session
 study/    Data model comparison study (current focus)
 src/app/  Splash page (Next.js, static for now)
 ```
 
 The CLI is the primary capture interface. The web app is a splash; a graph/timeline UI is out of current scope.
+
+## Current Status
+
+The project is CLI-first. The README describes the intended capture, storage,
+search, import, and export behavior for the interview system. The `src/app`
+surface is intentionally minimal right now: it renders a static splash page and
+does not read from the SQLite database.
+
+The web app should not be treated as the primary product surface yet. Future web
+work can add graph, timeline, search, or export views, but those are not part of
+the current scope.
+
+## Documentation Notes
+
+The schema rules below are the source of truth for the current data model:
+
+- `captured_at` records when the interview captured the node.
+- `memory_date` records when the remembered event occurred, if known.
+- `memory_date` and `memory_date_granularity` are always null together.
+- `depth` is stored at insert time because nodes are append-only.
+- `segment` is the configured interview domain.
+- `tag` is the per-node thematic label extracted from the response.
 
 ## Running
 
@@ -127,11 +150,29 @@ npm run dump -- --segment dream_journal
 npm run dump -- --export backup.json
 ```
 
-Interview sessions require `OPENAI_API_KEY` in `.env` (see `.env.example`). Export does not.
-
 ```sh
 npm test                              # Run the test suite
+BRAINDUMP_LIVE_TESTS=1 npm test       # Also run live backend checks when credentials are available
 ```
+
+### Authentication
+
+The interview can run on either of two chat backends:
+
+- **Codex subscription** — sign in once with `codex login` (a ChatGPT Plus/Pro account). Brain Dump drives the local `codex app-server`, so chat rides your subscription with no API billing. The Codex CLI must be installed and logged in.
+- **OpenAI API key** — set `OPENAI_API_KEY` in `.env` (see `.env.example`). Used for chat when Codex isn't available, and **always** for embeddings (vector search) — the subscription doesn't expose embeddings.
+
+Selection is automatic: Codex is used when you're logged in, otherwise the API key. Override with `--backend codex|openai|auto` or `BRAINDUMP_BACKEND`.
+When `--backend codex` is forced, the CLI checks `codex login status` before starting and exits with a clear error if the Codex CLI is unavailable or not signed in.
+
+| Codex login | API key | Behavior |
+|---|---|---|
+| ✅ | ✅ | Codex chat; embeddings + automatic fallback on the API key |
+| ✅ | — | Codex chat; retrieval degrades to full-text search (no embeddings) |
+| — | ✅ | OpenAI API for everything |
+| — | — | Error — run `codex login` or set `OPENAI_API_KEY` |
+
+If the subscription hits its usage limit mid-session and an API key is set, Brain Dump prints a one-line notice and continues on the API key for the rest of the session (the subscription is retried on next launch).
 
 ### Segments
 

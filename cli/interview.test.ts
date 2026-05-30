@@ -2,63 +2,22 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import type OpenAI from "openai";
 
+import type { ExtractedNode } from "./backends/types.js";
 import {
   buildSystemPrompt,
   buildOpeningMessage,
-  runTurn,
+  persistNodes,
   SEGMENTS,
   type InterviewState,
 } from "./interview.js";
 import {
   type Db,
   getNodeById,
-  getNodeCount,
   getRecentNodes,
   insertNode,
   openDb,
 } from "./store.js";
 import type { DumpNode } from "./types.js";
-
-// --- stream helpers ---
-
-type Chunk = OpenAI.Chat.ChatCompletionChunk;
-
-function makeStream(chunks: Chunk[]): AsyncIterable<Chunk> {
-  return {
-    [Symbol.asyncIterator]: async function* () {
-      for (const c of chunks) yield c;
-    },
-  };
-}
-
-function contentChunk(text: string): Chunk {
-  return {
-    id: "x",
-    object: "chat.completion.chunk",
-    created: 0,
-    model: "gpt-4o",
-    choices: [{ index: 0, delta: { content: text }, finish_reason: null, logprobs: null }],
-  };
-}
-
-function toolCallChunk(index: number, id: string, name: string, args: string): Chunk {
-  return {
-    id: "x",
-    object: "chat.completion.chunk",
-    created: 0,
-    model: "gpt-4o",
-    choices: [
-      {
-        index: 0,
-        delta: {
-          tool_calls: [{ index, id, function: { name, arguments: args } }],
-        },
-        finish_reason: null,
-        logprobs: null,
-      },
-    ],
-  };
-}
 
 function makeMockEmbedding(): number[] {
   return new Array(1536).fill(0);
@@ -68,24 +27,15 @@ function makeMockOpenAI() {
   return {
     embeddings: {
       create: vi.fn().mockResolvedValue({
-        data: [{ embedding: makeMockEmbedding(), index: 0, object: "embedding" }],
+        data: [
+          { embedding: makeMockEmbedding(), index: 0, object: "embedding" },
+        ],
         model: "text-embedding-3-small",
         object: "list",
         usage: { prompt_tokens: 1, total_tokens: 1 },
       }),
     },
   } as unknown as OpenAI;
-}
-
-function makeMockClient(chunks: Chunk[]) {
-  const mockCreate = vi.fn().mockResolvedValue(makeStream(chunks));
-  return {
-    client: {
-      ...makeMockOpenAI(),
-      chat: { completions: { create: mockCreate } },
-    } as unknown as OpenAI,
-    mockCreate,
-  };
 }
 
 function makeNode(overrides: Partial<DumpNode> = {}): DumpNode {
@@ -103,72 +53,117 @@ function makeNode(overrides: Partial<DumpNode> = {}): DumpNode {
   };
 }
 
+function extracted(overrides: Partial<ExtractedNode> = {}): ExtractedNode {
+  return {
+    tag: "sudden loss",
+    content: "I saw the dog",
+    parentId: "",
+    ...overrides,
+  };
+}
+
 let db: Db;
-let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 });
 
 afterEach(() => {
-  stdoutSpy.mockRestore();
   db.close();
 });
 
 function makeState(): InterviewState {
-  return { history: [], db, lastParentId: null, segment: "life_story" };
+  return { db, lastParentId: null, segment: "life_story" };
 }
 
 // --- buildSystemPrompt ---
 
 describe("buildSystemPrompt", () => {
   it("returns base prompt when db is empty", async () => {
-    const openai = makeMockOpenAI();
-    const prompt = await buildSystemPrompt(db, openai, "life_story");
+    const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
     expect(prompt).toContain("warm, patient interviewer");
     expect(prompt).not.toContain("Context from previous sessions");
   });
 
+  it("does not leak any extraction-mechanism wording (lives in backend tails now)", async () => {
+    const prompt = await buildSystemPrompt(db, null, "life_story");
+    expect(prompt).not.toContain("extract_memory_node");
+  });
+
   it("includes context block with last 10 nodes when db has 11 nodes", async () => {
-    const openai = makeMockOpenAI();
     for (let i = 0; i < 11; i++) {
       insertNode(db, makeNode({ id: `n${i}`, tag: `tag-${i}`, capturedAt: i }));
     }
-    const prompt = await buildSystemPrompt(db, openai, "life_story");
+    const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
     expect(prompt).toContain("tag-10");
     expect(prompt).not.toContain("tag-0");
-    const matches = prompt.match(/depth \d/g) ?? [];
-    expect(matches).toHaveLength(10);
+    expect((prompt.match(/depth \d/g) ?? []).length).toBe(10);
   });
 
   it("prioritises search-matched nodes when recentInput is provided", async () => {
-    // Mock returns a zero vector — no embeddings stored, so vector search returns empty,
-    // falling back to FTS5 which surfaces the "grandmother" node.
     const openai = makeMockOpenAI();
-    insertNode(db, makeNode({ id: "old", tag: "distant memory", content: "grandmother in the garden", capturedAt: 1 }));
+    insertNode(
+      db,
+      makeNode({
+        id: "old",
+        tag: "distant memory",
+        content: "grandmother in the garden",
+        capturedAt: 1,
+      }),
+    );
     for (let i = 0; i < 10; i++) {
-      insertNode(db, makeNode({ id: `new${i}`, tag: `recent-${i}`, content: "daily routine stuff", capturedAt: 1000 + i }));
+      insertNode(
+        db,
+        makeNode({
+          id: `new${i}`,
+          tag: `recent-${i}`,
+          content: "daily routine stuff",
+          capturedAt: 1000 + i,
+        }),
+      );
     }
-    const promptWithout = await buildSystemPrompt(db, openai, "life_story");
-    expect(promptWithout).not.toContain("distant memory");
-    const promptWith = await buildSystemPrompt(db, openai, "life_story", "I was with my grandmother");
-    expect(promptWith).toContain("distant memory");
+    expect(await buildSystemPrompt(db, openai, "life_story")).not.toContain(
+      "distant memory",
+    );
+    expect(
+      await buildSystemPrompt(
+        db,
+        openai,
+        "life_story",
+        "I was with my grandmother",
+      ),
+    ).toContain("distant memory");
   });
 
-  it("only surfaces nodes from the active segment", async () => {
-    const openai = makeMockOpenAI();
-    insertNode(db, makeNode({ id: "ls", tag: "life memory", content: "the old house", capturedAt: 1, segment: "life_story" }));
-    insertNode(db, makeNode({ id: "dj", tag: "dream vision", content: "flying over water", capturedAt: 2, segment: "dream_journal" }));
-    const prompt = await buildSystemPrompt(db, openai, "dream_journal");
-    expect(prompt).toContain("dream vision");
-    expect(prompt).not.toContain("life memory");
+  it("works with a null client (no embeddings) — degrades to FTS5", async () => {
+    insertNode(
+      db,
+      makeNode({
+        id: "old",
+        tag: "distant memory",
+        content: "grandmother in the garden",
+        capturedAt: 1,
+      }),
+    );
+    const prompt = await buildSystemPrompt(
+      db,
+      null,
+      "life_story",
+      "grandmother",
+    );
+    expect(prompt).toContain("distant memory");
   });
 
   it("uses pre-computed recentEmbedding and does not call embeddings.create", async () => {
     const openai = makeMockOpenAI();
     insertNode(db, makeNode({ id: "e1", tag: "quiet joy" }));
-    const prompt = await buildSystemPrompt(db, openai, "life_story", "some input", makeMockEmbedding());
+    const prompt = await buildSystemPrompt(
+      db,
+      openai,
+      "life_story",
+      "some input",
+      makeMockEmbedding(),
+    );
     expect(prompt).toContain("Context from previous sessions");
     expect(openai.embeddings.create).not.toHaveBeenCalled();
   });
@@ -178,49 +173,38 @@ describe("buildSystemPrompt", () => {
 
 describe("buildOpeningMessage", () => {
   it("returns first-session prompt when db is empty", () => {
-    expect(buildOpeningMessage(db, "life_story")).toBe("What is your first memory?");
+    expect(buildOpeningMessage(db, "life_story")).toBe(
+      "What is your first memory?",
+    );
   });
 
   it("returns returning-user prompt when nodes exist", () => {
     insertNode(db, makeNode({ id: "a1", tag: "wonder" }));
-    expect(buildOpeningMessage(db, "life_story")).toBe("Welcome back. Where would you like to go today?");
+    expect(buildOpeningMessage(db, "life_story")).toBe(
+      "Welcome back. Where would you like to go today?",
+    );
   });
 
   it("uses segment-specific questions for dream_journal", () => {
-    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.openingQuestion);
-    insertNode(db, makeNode({ id: "d1", tag: "dream vision", segment: "dream_journal" }));
-    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.returnGreeting);
-  });
-
-  it("treats segments independently — life_story nodes do not count for dream_journal", () => {
-    insertNode(db, makeNode({ id: "ls1", tag: "quiet joy", segment: "life_story" }));
-    expect(buildOpeningMessage(db, "dream_journal")).toBe(SEGMENTS.dream_journal.openingQuestion);
+    expect(buildOpeningMessage(db, "dream_journal")).toBe(
+      SEGMENTS.dream_journal.openingQuestion,
+    );
+    insertNode(
+      db,
+      makeNode({ id: "d1", tag: "dream vision", segment: "dream_journal" }),
+    );
+    expect(buildOpeningMessage(db, "dream_journal")).toBe(
+      SEGMENTS.dream_journal.returnGreeting,
+    );
   });
 });
 
-// --- runTurn ---
+// --- persistNodes ---
 
-describe("runTurn", () => {
-  it("content-only stream: appends history but persists nothing", async () => {
-    const { client } = makeMockClient([contentChunk("Hello "), contentChunk("world")]);
+describe("persistNodes", () => {
+  it("persists a node with the full schema", () => {
     const state = makeState();
-    await runTurn(client, state, "hi there");
-
-    expect(state.history).toHaveLength(2);
-    expect(state.history[0]).toEqual({ role: "user", content: "hi there" });
-    const assistant = state.history[1] as OpenAI.Chat.ChatCompletionAssistantMessageParam;
-    expect(assistant.content).toBe("Hello world");
-    expect(assistant.tool_calls).toBeUndefined();
-    expect(getNodeCount(db)).toBe(0);
-  });
-
-  it("single tool-call: persists node with full schema", async () => {
-    const args = JSON.stringify({ tag: "sudden loss", content: "I saw the dog", parentId: "" });
-    const { client } = makeMockClient([toolCallChunk(0, "call_001", "extract_memory_node", args)]);
-    const state = makeState();
-    await runTurn(client, state, "tell me more");
-
-    expect(getNodeCount(db)).toBe(1);
+    persistNodes(db, state, [extracted()], null);
     const stored = getRecentNodes(db, 1)[0];
     expect(stored.tag).toBe("sudden loss");
     expect(stored.content).toBe("I saw the dog");
@@ -230,128 +214,109 @@ describe("runTurn", () => {
     expect(stored.segment).toBe("life_story");
     expect(stored.memoryDate).toBeNull();
     expect(stored.memoryDateGranularity).toBeNull();
-    expect(typeof stored.capturedAt).toBe("number");
-
-    const toolMsg = state.history.find(
-      (m) => m.role === "tool",
-    ) as OpenAI.Chat.ChatCompletionToolMessageParam | undefined;
-    expect(toolMsg?.content).toBe("ok");
     expect(state.lastParentId).toBe(stored.id);
   });
 
-  it("tool-call with date fields: persists memoryDate and memoryDateGranularity", async () => {
-    const args = JSON.stringify({
-      tag: "summer freedom",
-      content: "riding bikes until dark",
-      parentId: "",
-      memoryDate: "1994",
-      memoryDateGranularity: "year",
-    });
-    const { client } = makeMockClient([toolCallChunk(0, "call_date", "extract_memory_node", args)]);
-    const state = makeState();
-    await runTurn(client, state, "what did you do that summer");
-
+  it("stores memoryDate and a valid granularity", () => {
+    persistNodes(
+      db,
+      makeState(),
+      [extracted({ memoryDate: "1994", memoryDateGranularity: "year" })],
+      null,
+    );
     const stored = getRecentNodes(db, 1)[0];
     expect(stored.memoryDate).toBe("1994");
     expect(stored.memoryDateGranularity).toBe("year");
   });
 
-  it("tool-call with invalid granularity: stores null for memoryDateGranularity", async () => {
-    const args = JSON.stringify({
-      tag: "wonder and curiosity",
-      content: "the attic boxes",
-      parentId: "",
-      memoryDate: "1990s",
-      memoryDateGranularity: "invalid_value",
-    });
-    const { client } = makeMockClient([toolCallChunk(0, "call_badgran", "extract_memory_node", args)]);
-    const state = makeState();
-    await runTurn(client, state, "tell me about that");
-
+  it("nulls an invalid granularity but keeps the date", () => {
+    persistNodes(
+      db,
+      makeState(),
+      [
+        extracted({
+          memoryDate: "1990s",
+          memoryDateGranularity: "invalid_value",
+        }),
+      ],
+      null,
+    );
     const stored = getRecentNodes(db, 1)[0];
     expect(stored.memoryDate).toBe("1990s");
     expect(stored.memoryDateGranularity).toBeNull();
   });
 
-  it("multi-chunk argument assembly: assembles into a single persisted node", async () => {
-    const { client } = makeMockClient([
-      toolCallChunk(0, "call_002", "extract_memory_node", '{"tag":"'),
-      toolCallChunk(0, "", "", 'sudden joy","content":"'),
-      toolCallChunk(0, "", "", 'birthday cake","parentId":""}'),
-    ]);
-    const state = makeState();
-    await runTurn(client, state, "what happened");
-
-    expect(getNodeCount(db)).toBe(1);
-    const stored = getRecentNodes(db, 1)[0];
-    expect(stored.tag).toBe("sudden joy");
-    expect(stored.content).toBe("birthday cake");
-  });
-
-  it("depth computation: child node gets parent depth + 1", async () => {
-    insertNode(
+  it("computes child depth from a resolved parent", () => {
+    insertNode(db, makeNode({ id: "parent-id", tag: "quiet shame", depth: 0 }));
+    persistNodes(
       db,
-      makeNode({ id: "parent-id", tag: "quiet shame", content: "the hallway", depth: 0 }),
+      makeState(),
+      [extracted({ tag: "fear", content: "dark room", parentId: "parent-id" })],
+      null,
     );
-    const args = JSON.stringify({ tag: "fear", content: "dark room", parentId: "parent-id" });
-    const { client } = makeMockClient([toolCallChunk(0, "call_003", "extract_memory_node", args)]);
-    const state = makeState();
-    await runTurn(client, state, "go on");
-
     const child = getRecentNodes(db, 1)[0];
     expect(child.depth).toBe(1);
     expect(child.parentId).toBe("parent-id");
-
-    const parent = getNodeById(db, "parent-id");
-    expect(parent?.depth).toBe(0);
+    expect(getNodeById(db, "parent-id")?.depth).toBe(0);
   });
 
-  it("invalid JSON arguments: adds error tool message, persists nothing", async () => {
-    const { client } = makeMockClient([
-      toolCallChunk(0, "call_004", "extract_memory_node", "not-json{{{"),
-    ]);
-    const state = makeState();
-    await runTurn(client, state, "something");
-
-    expect(getNodeCount(db)).toBe(0);
-    const toolMsg = state.history.find(
-      (m) => m.role === "tool",
-    ) as OpenAI.Chat.ChatCompletionToolMessageParam | undefined;
-    expect(toolMsg?.content).toBe("error: invalid json");
+  it("attaches an empty parent id to state.lastParentId when available", () => {
+    insertNode(db, makeNode({ id: "last-id", tag: "quiet shame", depth: 0 }));
+    const state: InterviewState = {
+      db,
+      lastParentId: "last-id",
+      segment: "life_story",
+    };
+    persistNodes(
+      db,
+      state,
+      [
+        extracted({
+          tag: "follow-up",
+          content: "the next detail",
+          parentId: "",
+        }),
+      ],
+      null,
+    );
+    const child = getRecentNodes(db, 1)[0];
+    expect(child.parentId).toBe("last-id");
+    expect(child.depth).toBe(1);
   });
 
-  it("two simultaneous tool calls: both nodes persisted, both tool messages in history", async () => {
-    const args0 = JSON.stringify({ tag: "quiet joy", content: "the morning light", parentId: "" });
-    const args1 = JSON.stringify({ tag: "sudden loss", content: "the empty chair", parentId: "" });
-    const { client } = makeMockClient([
-      toolCallChunk(0, "call_a", "extract_memory_node", args0),
-      toolCallChunk(1, "call_b", "extract_memory_node", args1),
-    ]);
-    const state = makeState();
-    await runTurn(client, state, "two things happened");
-
-    expect(getNodeCount(db)).toBe(2);
-    const toolMsgs = state.history.filter(
-      (m) => m.role === "tool",
-    ) as OpenAI.Chat.ChatCompletionToolMessageParam[];
-    expect(toolMsgs).toHaveLength(2);
-    expect(toolMsgs.every((m) => m.content === "ok")).toBe(true);
+  it("falls back to state.lastParentId when an extracted parent id is invalid", () => {
+    insertNode(db, makeNode({ id: "last-id", tag: "quiet shame", depth: 2 }));
+    const state: InterviewState = {
+      db,
+      lastParentId: "last-id",
+      segment: "life_story",
+    };
+    persistNodes(db, state, [extracted({ parentId: "missing-id" })], null);
+    const child = getRecentNodes(db, 1)[0];
+    expect(child.parentId).toBe("last-id");
+    expect(child.depth).toBe(3);
   });
 
-  it("content + tool call: assistant entry has both content and tool_calls", async () => {
-    const args = JSON.stringify({ tag: "wonder", content: "the night sky", parentId: "" });
-    const { client } = makeMockClient([
-      contentChunk("Tell me more."),
-      toolCallChunk(0, "call_005", "extract_memory_node", args),
-    ]);
+  it("persists multiple nodes and points lastParentId at the last", () => {
     const state = makeState();
-    await runTurn(client, state, "it was beautiful");
+    persistNodes(
+      db,
+      state,
+      [
+        extracted({ tag: "a", content: "first" }),
+        extracted({ tag: "b", content: "second" }),
+      ],
+      null,
+    );
+    const recent = getRecentNodes(db, 2);
+    expect(recent).toHaveLength(2);
+    expect(state.lastParentId).toBe(recent[0].id); // most recent first
+  });
 
-    const assistant = state.history.find(
-      (m) => m.role === "assistant",
-    ) as OpenAI.Chat.ChatCompletionAssistantMessageParam;
-    expect(assistant.content).toBe("Tell me more.");
-    expect(assistant.tool_calls).toHaveLength(1);
-    expect(getNodeCount(db)).toBe(1);
+  it("stores an embedding when one is provided", () => {
+    expect(() =>
+      persistNodes(db, makeState(), [extracted()], makeMockEmbedding()),
+    ).not.toThrow();
+    expect(getRecentNodes(db, 1)).toHaveLength(1);
   });
 });
