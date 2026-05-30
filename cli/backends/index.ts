@@ -13,7 +13,12 @@ import type OpenAI from "openai";
 
 import { CodexBackend } from "./codex.js";
 import { OpenAIBackend } from "./openai.js";
-import { type ChatBackend, type TranscriptEntry, type TurnResult, UsageLimitExceededError } from "./types.js";
+import {
+  type ChatBackend,
+  type TranscriptEntry,
+  type TurnResult,
+  UsageLimitExceededError,
+} from "./types.js";
 
 export type { ChatBackend } from "./types.js";
 
@@ -53,26 +58,46 @@ export class ChatSession {
       result = await this.active.runTurn(input);
     }
 
-    this.transcript.push({ role: "user", text: userInput }, { role: "assistant", text: result.question });
+    this.transcript.push(
+      { role: "user", text: userInput },
+      { role: "assistant", text: result.question },
+    );
     return result;
   }
 
   close(): void {
     void this.primary.close();
-    if (this.fallback && this.fallback !== this.primary) void this.fallback.close();
+    if (this.fallback && this.fallback !== this.primary)
+      void this.fallback.close();
   }
 }
 
 /** True if the Codex CLI is installed and signed in. */
-export function detectCodexLogin(command = "codex"): Promise<boolean> {
+export function detectCodexLogin(
+  command = "codex",
+  timeoutMs = 2_000,
+): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false;
     let out = "";
+    function finish(value: boolean): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }
     // `codex login status` prints "Logged in …" to stderr, so capture both streams.
-    const child = spawn(command, ["login", "status"], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, ["login", "status"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(false);
+    }, timeoutMs);
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.stderr.on("data", (d: Buffer) => (out += d.toString()));
-    child.on("error", () => resolve(false)); // not installed / not on PATH
-    child.on("exit", (code) => resolve(code === 0 && /logged in/i.test(out)));
+    child.on("error", () => finish(false)); // not installed / not on PATH
+    child.on("exit", (code) => finish(code === 0 && /logged in/i.test(out)));
   });
 }
 
@@ -88,17 +113,27 @@ export interface SessionResult {
 export async function createSession(opts: {
   preference: BackendPreference;
   openai: OpenAI | null;
+  codexCommand?: string;
 }): Promise<SessionResult> {
-  const { preference, openai } = opts;
+  const { preference, openai, codexCommand = "codex" } = opts;
   const fallback = openai ? new OpenAIBackend(openai) : null;
 
   let useCodex: boolean;
   if (preference === "openai") useCodex = false;
-  else if (preference === "codex") useCodex = true;
-  else useCodex = await detectCodexLogin();
+  else {
+    useCodex = await detectCodexLogin(codexCommand);
+    if (preference === "codex" && !useCodex) {
+      throw new Error(
+        "Codex backend requested, but `codex login status` did not report a logged-in account.",
+      );
+    }
+  }
 
   if (useCodex) {
-    return { session: new ChatSession(CodexBackend.create(), fallback), primaryName: "codex" };
+    return {
+      session: new ChatSession(CodexBackend.create(codexCommand), fallback),
+      primaryName: "codex",
+    };
   }
   if (!fallback) {
     throw new Error(

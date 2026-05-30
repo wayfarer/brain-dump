@@ -8,6 +8,7 @@ class FakeTransport implements AppServerTransport {
   sent: Array<Record<string, unknown>> = [];
   private lineCb: ((line: string) => void) | null = null;
   private exitCb: ((code: number | null) => void) | null = null;
+  private errorCb: ((err: Error) => void) | null = null;
 
   send(line: string): void {
     this.sent.push(JSON.parse(line) as Record<string, unknown>);
@@ -18,6 +19,9 @@ class FakeTransport implements AppServerTransport {
   onExit(cb: (code: number | null) => void): void {
     this.exitCb = cb;
   }
+  onError(cb: (err: Error) => void): void {
+    this.errorCb = cb;
+  }
   close(): void {}
 
   // test helpers
@@ -26,6 +30,9 @@ class FakeTransport implements AppServerTransport {
   }
   exit(code: number | null): void {
     this.exitCb?.(code);
+  }
+  error(err: Error): void {
+    this.errorCb?.(err);
   }
   lastId(): number {
     return this.sent[this.sent.length - 1].id as number;
@@ -38,7 +45,10 @@ describe("AppServerClient", () => {
     const client = new AppServerClient(t);
     const p = client.request("initialize", { hello: true });
 
-    expect(t.sent[0]).toMatchObject({ method: "initialize", params: { hello: true } });
+    expect(t.sent[0]).toMatchObject({
+      method: "initialize",
+      params: { hello: true },
+    });
     t.push({ id: t.lastId(), result: { ok: 1 } });
     await expect(p).resolves.toEqual({ ok: 1 });
   });
@@ -56,9 +66,15 @@ describe("AppServerClient", () => {
     const client = new AppServerClient(t);
     const turn = client.expectTurn();
 
-    t.push({ method: "item/agentMessage/delta", params: { delta: '{"reply":"' } });
+    t.push({
+      method: "item/agentMessage/delta",
+      params: { delta: '{"reply":"' },
+    });
     t.push({ method: "item/agentMessage/delta", params: { delta: 'hi"}' } });
-    t.push({ method: "turn/completed", params: { turn: { status: "completed" } } });
+    t.push({
+      method: "turn/completed",
+      params: { turn: { status: "completed" } },
+    });
 
     const { turn: payload, text } = await turn;
     expect(text).toBe('{"reply":"hi"}');
@@ -93,5 +109,23 @@ describe("AppServerClient", () => {
     const p = client.request("initialize", {});
     t.exit(1);
     await expect(p).rejects.toThrow(/exited/);
+  });
+
+  it("rejects pending turns when the server exits before completion", async () => {
+    const t = new FakeTransport();
+    const client = new AppServerClient(t);
+    const p = client.expectTurn();
+    t.exit(1);
+    await expect(p).rejects.toThrow(/exited/);
+  });
+
+  it("rejects pending work when the transport emits an error", async () => {
+    const t = new FakeTransport();
+    const client = new AppServerClient(t);
+    const request = client.request("initialize", {});
+    const turn = client.expectTurn();
+    t.error(new Error("spawn failed"));
+    await expect(request).rejects.toThrow("spawn failed");
+    await expect(turn).rejects.toThrow("spawn failed");
   });
 });

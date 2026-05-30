@@ -152,6 +152,7 @@ npm run dump -- --export backup.json
 
 ```sh
 npm test                              # Run the test suite
+BRAINDUMP_LIVE_TESTS=1 npm test       # Also run live backend checks when credentials are available
 ```
 
 ### Authentication
@@ -162,6 +163,7 @@ The interview can run on either of two chat backends:
 - **OpenAI API key** — set `OPENAI_API_KEY` in `.env` (see `.env.example`). Used for chat when Codex isn't available, and **always** for embeddings (vector search) — the subscription doesn't expose embeddings.
 
 Selection is automatic: Codex is used when you're logged in, otherwise the API key. Override with `--backend codex|openai|auto` or `BRAINDUMP_BACKEND`.
+When `--backend codex` is forced, the CLI checks `codex login status` before starting and exits with a clear error if the Codex CLI is unavailable or not signed in.
 
 | Codex login | API key | Behavior |
 |---|---|---|

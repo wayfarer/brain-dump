@@ -19,6 +19,7 @@ export interface AppServerTransport {
   send(line: string): void;
   onLine(cb: (line: string) => void): void;
   onExit(cb: (code: number | null) => void): void;
+  onError(cb: (err: Error) => void): void;
   close(): void;
 }
 
@@ -32,6 +33,7 @@ export function spawnCodexTransport(command = "codex"): AppServerTransport {
     send: (line) => child.stdin.write(line + "\n"),
     onLine: (cb) => rl.on("line", cb),
     onExit: (cb) => child.on("exit", cb),
+    onError: (cb) => child.on("error", cb),
     close: () => {
       child.stdin.end();
       child.kill();
@@ -48,8 +50,14 @@ export interface CompletedTurn {
 
 export class AppServerClient {
   private nextId = 1;
-  private pending = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void }>();
-  private turnWaiters: Array<(t: CompletedTurn) => void> = [];
+  private pending = new Map<
+    number,
+    { resolve: (v: Json) => void; reject: (e: Error) => void }
+  >();
+  private turnWaiters: Array<{
+    resolve: (t: CompletedTurn) => void;
+    reject: (e: Error) => void;
+  }> = [];
   private agentText = "";
 
   constructor(private transport: AppServerTransport) {
@@ -64,11 +72,19 @@ export class AppServerClient {
       }
       this.onMessage(msg);
     });
-    transport.onExit((code) => {
-      const err = new Error(`codex app-server exited (code ${code ?? "null"})`);
-      for (const { reject } of this.pending.values()) reject(err);
-      this.pending.clear();
-    });
+    transport.onExit((code) =>
+      this.rejectAll(
+        new Error(`codex app-server exited (code ${code ?? "null"})`),
+      ),
+    );
+    transport.onError((err) => this.rejectAll(err));
+  }
+
+  private rejectAll(err: Error): void {
+    for (const { reject } of this.pending.values()) reject(err);
+    this.pending.clear();
+    for (const { reject } of this.turnWaiters) reject(err);
+    this.turnWaiters = [];
   }
 
   private onMessage(msg: Json): void {
@@ -103,7 +119,7 @@ export class AppServerClient {
       case "turn/completed": {
         const turn = (params.turn as Json) ?? {};
         const waiter = this.turnWaiters.shift();
-        if (waiter) waiter({ turn, text: this.agentText });
+        if (waiter) waiter.resolve({ turn, text: this.agentText });
         break;
       }
       default:
@@ -130,7 +146,9 @@ export class AppServerClient {
    */
   expectTurn(): Promise<CompletedTurn> {
     this.agentText = "";
-    return new Promise((resolve) => this.turnWaiters.push(resolve));
+    return new Promise((resolve, reject) =>
+      this.turnWaiters.push({ resolve, reject }),
+    );
   }
 
   close(): void {

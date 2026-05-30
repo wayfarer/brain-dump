@@ -17,7 +17,9 @@ function codexLoggedIn(): boolean {
   return /logged in/i.test((r.stdout ?? "") + (r.stderr ?? ""));
 }
 
-const MEMORY = "I remember standing at my grandmother's grave for the first time. I was seven and it was raining.";
+const LIVE_TESTS = process.env.BRAINDUMP_LIVE_TESTS === "1";
+const MEMORY =
+  "I remember standing at my grandmother's grave for the first time. I was seven and it was raining.";
 
 function expectRootNode(db: Db): void {
   expect(getNodeCount(db)).toBeGreaterThan(0);
@@ -44,34 +46,40 @@ afterEach(() => {
   db.close();
 });
 
-describe.skipIf(!process.env.OPENAI_API_KEY)("live runTurn — OpenAI backend", () => {
-  it(
-    "extracts a memory node from a first-person memory statement",
-    async () => {
+describe.skipIf(!LIVE_TESTS || !process.env.OPENAI_API_KEY)(
+  "live runTurn — OpenAI backend",
+  () => {
+    it("extracts a memory node from a first-person memory statement", async () => {
       const client = new OpenAI();
       const session = new ChatSession(new OpenAIBackend(client), null);
-      const state: InterviewState = { db, lastParentId: null, segment: "life_story" };
+      const state: InterviewState = {
+        db,
+        lastParentId: null,
+        segment: "life_story",
+      };
       await runTurn(session, client, state, MEMORY);
       session.close();
       expectRootNode(db);
-    },
-    30_000,
-  );
-});
+    }, 30_000);
+  },
+);
 
-describe.skipIf(!codexLoggedIn())("live runTurn — Codex backend (subscription)", () => {
-  it(
-    "extracts a memory node via the codex app-server",
-    async () => {
+describe.skipIf(!LIVE_TESTS || !codexLoggedIn())(
+  "live runTurn — Codex backend (subscription)",
+  () => {
+    it("extracts a memory node via the codex app-server", async () => {
       const session = new ChatSession(CodexBackend.create(), null);
-      const state: InterviewState = { db, lastParentId: null, segment: "life_story" };
+      const state: InterviewState = {
+        db,
+        lastParentId: null,
+        segment: "life_story",
+      };
       try {
         await runTurn(session, null, state, MEMORY);
       } finally {
         session.close();
       }
       expectRootNode(db);
-    },
-    45_000,
-  );
-});
+    }, 45_000);
+  },
+);

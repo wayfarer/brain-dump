@@ -4,7 +4,16 @@ import OpenAI from "openai";
 
 import type { ChatSession } from "./backends/index.js";
 import type { ExtractedNode } from "./backends/types.js";
-import { type Db, getNodeById, getNodeCount, getRecentNodes, insertEmbeddingByRowid, insertNode, searchNodes, searchNodesByVector } from "./store.js";
+import {
+  type Db,
+  getNodeById,
+  getNodeCount,
+  getRecentNodes,
+  insertEmbeddingByRowid,
+  insertNode,
+  searchNodes,
+  searchNodesByVector,
+} from "./store.js";
 import type { DumpNode, MemoryDateGranularity } from "./types.js";
 
 export interface SegmentConfig {
@@ -41,7 +50,14 @@ Rules:
 - Vary your approach: zoom in on a detail, ask about a person, ask what came just before or after, ask how old they were.
 - Never break character. Never explain yourself.`;
 
-const VALID_GRANULARITIES = new Set<string>(["decade", "year", "season", "month", "date", "datetime"]);
+const VALID_GRANULARITIES = new Set<string>([
+  "decade",
+  "year",
+  "season",
+  "month",
+  "date",
+  "datetime",
+]);
 
 export interface InterviewState {
   db: Db;
@@ -83,12 +99,16 @@ export async function buildSystemPrompt(
     }
 
     if (searchResults.length === 0) {
-      searchResults = searchNodes(db, recentInput, 5).filter((n) => n.segment === segment);
+      searchResults = searchNodes(db, recentInput, 5).filter(
+        (n) => n.segment === segment,
+      );
     }
 
     if (searchResults.length > 0) {
       const searchedIds = new Set(searchResults.map((n) => n.id));
-      const filler = getRecentNodes(db, 10, segment).filter((n) => !searchedIds.has(n.id));
+      const filler = getRecentNodes(db, 10, segment).filter(
+        (n) => !searchedIds.has(n.id),
+      );
       contextNodes = [...searchResults, ...filler].slice(0, 10).reverse();
     } else {
       contextNodes = getRecentNodes(db, 10, segment).reverse();
@@ -97,7 +117,9 @@ export async function buildSystemPrompt(
     contextNodes = getRecentNodes(db, 10, segment).reverse();
   }
 
-  const summary = contextNodes.map((n) => `"${n.tag}" — depth ${n.depth}`).join("\n");
+  const summary = contextNodes
+    .map((n) => `"${n.tag}" — depth ${n.depth}`)
+    .join("\n");
 
   return `${BASE_SYSTEM_PROMPT}
 
@@ -123,16 +145,22 @@ export function persistNodes(
   embedding: number[] | null,
 ): void {
   for (const n of nodes) {
-    const parentNode = n.parentId ? getNodeById(db, n.parentId) : null;
+    const explicitParent = n.parentId ? getNodeById(db, n.parentId) : null;
+    const fallbackParent =
+      !explicitParent && state.lastParentId
+        ? getNodeById(db, state.lastParentId)
+        : null;
+    const parentNode = explicitParent ?? fallbackParent;
     const granularity =
-      n.memoryDateGranularity && VALID_GRANULARITIES.has(n.memoryDateGranularity)
+      n.memoryDateGranularity &&
+      VALID_GRANULARITIES.has(n.memoryDateGranularity)
         ? (n.memoryDateGranularity as MemoryDateGranularity)
         : null;
     const node: DumpNode = {
       id: randomUUID(),
       tag: n.tag,
       content: n.content,
-      parentId: n.parentId || null,
+      parentId: parentNode?.id ?? null,
       capturedAt: Date.now(),
       memoryDate: n.memoryDate || null,
       memoryDateGranularity: granularity,
@@ -162,14 +190,23 @@ export async function runTurn(
   let embedding: number[] | null = null;
   if (openai) {
     try {
-      const r = await openai.embeddings.create({ model: "text-embedding-3-small", input: userInput });
+      const r = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: userInput,
+      });
       embedding = r.data[0].embedding;
     } catch {
       /* retrieval degrades to FTS5, storage skipped */
     }
   }
 
-  const systemPrompt = await buildSystemPrompt(state.db, openai, state.segment, userInput, embedding ?? undefined);
+  const systemPrompt = await buildSystemPrompt(
+    state.db,
+    openai,
+    state.segment,
+    userInput,
+    embedding ?? undefined,
+  );
   const result = await session.turn(userInput, systemPrompt);
   persistNodes(state.db, state, result.nodes, embedding);
 }

@@ -1,8 +1,13 @@
 // @vitest-environment node
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { ChatSession } from "./index.js";
-import { type ChatBackend, type RunTurnInput, type TurnResult, UsageLimitExceededError } from "./types.js";
+import { ChatSession, createSession, detectCodexLogin } from "./index.js";
+import {
+  type ChatBackend,
+  type RunTurnInput,
+  type TurnResult,
+  UsageLimitExceededError,
+} from "./types.js";
 
 class FakeBackend implements ChatBackend {
   calls: RunTurnInput[] = [];
@@ -51,7 +56,9 @@ describe("ChatSession", () => {
     expect(r1.question).toBe("from openai");
     expect(session.activeName).toBe("openai");
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(String(logSpy.mock.calls[0][0])).toContain("Subscription limit reached");
+    expect(String(logSpy.mock.calls[0][0])).toContain(
+      "Subscription limit reached",
+    );
 
     // Second turn goes straight to fallback — primary not called again, no second notice.
     await session.turn("two", "P");
@@ -94,7 +101,10 @@ describe("ChatSession", () => {
     const primary = new FakeBackend("codex", () => {
       throw boom;
     });
-    const session = new ChatSession(primary, new FakeBackend("openai", () => reply("x")));
+    const session = new ChatSession(
+      primary,
+      new FakeBackend("openai", () => reply("x")),
+    );
     await expect(session.turn("hi", "P")).rejects.toThrow("network down");
   });
 
@@ -104,5 +114,23 @@ describe("ChatSession", () => {
     new ChatSession(primary, fallback).close();
     expect(primary.closed).toBe(true);
     expect(fallback.closed).toBe(true);
+  });
+});
+
+describe("backend selection", () => {
+  it("detectCodexLogin returns false when the command is unavailable", async () => {
+    await expect(
+      detectCodexLogin("definitely-not-codex-for-braindump-tests"),
+    ).resolves.toBe(false);
+  });
+
+  it("forced codex mode fails early when login is unavailable", async () => {
+    await expect(
+      createSession({
+        preference: "codex",
+        openai: null,
+        codexCommand: "definitely-not-codex-for-braindump-tests",
+      }),
+    ).rejects.toThrow(/Codex backend requested/);
   });
 });
