@@ -44,11 +44,14 @@ describe("CodexBackend", () => {
   it("starts a fresh thread per turn with the current prompt and transcript", async () => {
     const transport = new FakeTransport();
     const backend = new CodexBackend(new AppServerClient(transport));
+    const firstText = vi.fn();
+    const text = vi.fn();
 
     const first = backend.runTurn({
       userInput: "u1",
       systemPrompt: "PROMPT 1",
       transcript: [],
+      events: { onFirstText: firstText, onText: text },
     });
     expect(transport.sent[0]).toMatchObject({ method: "initialize" });
     transport.push({ id: transport.lastId(), result: {} });
@@ -78,6 +81,9 @@ describe("CodexBackend", () => {
       params: { turn: { status: "completed" } },
     });
     await expect(first).resolves.toMatchObject({ question: "q1", nodes: [] });
+    expect(firstText).toHaveBeenCalledTimes(1);
+    expect(text).toHaveBeenCalledWith("q1");
+    expect(stdoutSpy).not.toHaveBeenCalled();
 
     const second = backend.runTurn({
       userInput: "u2",
@@ -86,6 +92,7 @@ describe("CodexBackend", () => {
         { role: "user", text: "u1" },
         { role: "assistant", text: "q1" },
       ],
+      events: { onFirstText: firstText, onText: text },
     });
     await tick();
     expect(transport.sent[3]).toMatchObject({ method: "thread/start" });
@@ -126,5 +133,7 @@ describe("CodexBackend", () => {
       params: { turn: { status: "completed" } },
     });
     await expect(second).resolves.toMatchObject({ question: "q2", nodes: [] });
+    expect(firstText).toHaveBeenCalledTimes(2);
+    expect(text).toHaveBeenCalledWith("q2");
   });
 });

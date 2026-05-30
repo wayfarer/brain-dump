@@ -17,7 +17,7 @@ export interface ExtractedNode {
 }
 
 export interface TurnResult {
-  /** The interviewer's next question, already streamed/printed to stdout. */
+  /** The interviewer's complete next question text. */
   question: string;
   /** Zero or more memories to persist (Codex yields 0–1; OpenAI may yield more). */
   nodes: ExtractedNode[];
@@ -29,19 +29,26 @@ export interface TranscriptEntry {
   text: string;
 }
 
+export interface TurnEvents {
+  /** Fired once immediately before the first visible assistant text. */
+  onFirstText?: () => void;
+  /** Fired for each assistant text chunk. */
+  onText?: (text: string) => void;
+}
+
 export interface RunTurnInput {
   userInput: string;
   /** Shared interviewer prompt + retrieval context; each backend appends its own extraction tail. */
   systemPrompt: string;
   /** Conversation so far (excludes the current userInput). */
   transcript: readonly TranscriptEntry[];
-  /** Fired once immediately before the backend writes the first visible answer output. */
-  onFirstOutput?: () => void;
+  /** Presentation events for assistant text. Backends must not write to stdout. */
+  events?: TurnEvents;
 }
 
 export interface ChatBackend {
   readonly name: "codex" | "openai";
-  /** Run one turn. Implementations write the question to stdout themselves. */
+  /** Run one turn and return extracted data; implementations do not write to stdout. */
   runTurn(input: RunTurnInput): Promise<TurnResult>;
   close(): void | Promise<void>;
 }
