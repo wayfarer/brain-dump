@@ -40,8 +40,17 @@ export class ChatSession {
     return this.active.name;
   }
 
-  async turn(userInput: string, systemPrompt: string): Promise<TurnResult> {
-    const input = { userInput, systemPrompt, transcript: [...this.transcript] };
+  async turn(
+    userInput: string,
+    systemPrompt: string,
+    onFirstOutput?: () => void,
+  ): Promise<TurnResult> {
+    const input = {
+      userInput,
+      systemPrompt,
+      transcript: [...this.transcript],
+      onFirstOutput,
+    };
 
     let result: TurnResult;
     try {

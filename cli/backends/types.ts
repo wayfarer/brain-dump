@@ -35,6 +35,8 @@ export interface RunTurnInput {
   systemPrompt: string;
   /** Conversation so far (excludes the current userInput). */
   transcript: readonly TranscriptEntry[];
+  /** Fired once immediately before the backend writes the first visible answer output. */
+  onFirstOutput?: () => void;
 }
 
 export interface ChatBackend {

@@ -176,10 +176,20 @@ export function getRecentNodes(db: Db, limit: number, segment?: string): DumpNod
   return rows.map(rowToNode);
 }
 
-export function getTagCounts(db: Db): Array<{ tag: string; count: number }> {
-  return db
-    .prepare("SELECT tag, COUNT(*) AS count FROM nodes GROUP BY tag ORDER BY count DESC")
-    .all() as Array<{ tag: string; count: number }>;
+export function getTagCounts(
+  db: Db,
+  segment?: string,
+): Array<{ tag: string; count: number }> {
+  const rows = segment
+    ? db
+        .prepare(
+          "SELECT tag, COUNT(*) AS count FROM nodes WHERE segment = ? GROUP BY tag ORDER BY count DESC",
+        )
+        .all(segment)
+    : db
+        .prepare("SELECT tag, COUNT(*) AS count FROM nodes GROUP BY tag ORDER BY count DESC")
+        .all();
+  return rows as Array<{ tag: string; count: number }>;
 }
 
 export function getNodeCount(db: Db, segment?: string): number {
@@ -200,19 +210,35 @@ function toFtsQuery(input: string): string {
     .join(" OR ");
 }
 
-export function searchNodes(db: Db, query: string, limit: number = 5): DumpNode[] {
+export function searchNodes(
+  db: Db,
+  query: string,
+  limit: number = 5,
+  segment?: string,
+): DumpNode[] {
   const ftsQuery = toFtsQuery(query);
   if (!ftsQuery) return [];
   try {
-    const rows = db
-      .prepare(
-        `SELECT nodes.* FROM nodes
-         JOIN nodes_fts ON nodes.rowid = nodes_fts.rowid
-         WHERE nodes_fts MATCH ?
-         ORDER BY rank
-         LIMIT ?`,
-      )
-      .all(ftsQuery, limit) as NodeRow[];
+    const rows = segment
+      ? (db
+          .prepare(
+            `SELECT nodes.* FROM nodes
+             JOIN nodes_fts ON nodes.rowid = nodes_fts.rowid
+             WHERE nodes_fts MATCH ?
+             AND nodes.segment = ?
+             ORDER BY rank
+             LIMIT ?`,
+          )
+          .all(ftsQuery, segment, limit) as NodeRow[])
+      : (db
+          .prepare(
+            `SELECT nodes.* FROM nodes
+             JOIN nodes_fts ON nodes.rowid = nodes_fts.rowid
+             WHERE nodes_fts MATCH ?
+             ORDER BY rank
+             LIMIT ?`,
+          )
+          .all(ftsQuery, limit) as NodeRow[]);
     return rows.map(rowToNode);
   } catch {
     return [];

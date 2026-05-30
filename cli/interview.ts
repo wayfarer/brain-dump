@@ -65,6 +65,22 @@ export interface InterviewState {
   segment: string;
 }
 
+/**
+ * Optional presentation hooks for a turn. When omitted, `runTurn` falls back to
+ * writing the AI response straight to stdout (its original behavior), so tests
+ * and non-interactive callers need no presenter.
+ */
+export interface TurnPresenter {
+  /** Fired once, just before the first response output appears (stop the spinner). */
+  onFirstToken?(): void;
+  /** Each streamed content chunk. Defaults to `process.stdout.write`. */
+  onContent?(text: string): void;
+  /** A memory node was persisted. */
+  onNodeSaved?(tag: string): void;
+  /** A tool call produced unparseable arguments; no node was saved. */
+  onNodeError?(): void;
+}
+
 export async function buildSystemPrompt(
   db: Db,
   openai: OpenAI | null,
@@ -143,6 +159,7 @@ export function persistNodes(
   state: InterviewState,
   nodes: ExtractedNode[],
   embedding: number[] | null,
+  presenter?: TurnPresenter,
 ): void {
   for (const n of nodes) {
     const explicitParent = n.parentId ? getNodeById(db, n.parentId) : null;
@@ -173,6 +190,8 @@ export function persistNodes(
       insertEmbeddingByRowid(db, rowid, embedding);
     }
     state.lastParentId = node.id;
+
+    presenter?.onNodeSaved?.(node.tag);
   }
 }
 
@@ -186,6 +205,7 @@ export async function runTurn(
   openai: OpenAI | null,
   state: InterviewState,
   userInput: string,
+  presenter?: TurnPresenter,
 ): Promise<void> {
   let embedding: number[] | null = null;
   if (openai) {
@@ -207,6 +227,8 @@ export async function runTurn(
     userInput,
     embedding ?? undefined,
   );
-  const result = await session.turn(userInput, systemPrompt);
-  persistNodes(state.db, state, result.nodes, embedding);
+  const result = await session.turn(userInput, systemPrompt, () => {
+    presenter?.onFirstToken?.();
+  });
+  persistNodes(state.db, state, result.nodes, embedding, presenter);
 }

@@ -36,6 +36,7 @@ yarn-error.log*
 
 # brain dump session data
 dump.json
+dump.json.migrated
 dump.db
 dump.db-journal
 dump.db-shm

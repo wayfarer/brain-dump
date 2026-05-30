@@ -63,7 +63,12 @@ export class OpenAIBackend implements ChatBackend {
     private model = "gpt-4o",
   ) {}
 
-  async runTurn({ userInput, systemPrompt, transcript }: RunTurnInput): Promise<TurnResult> {
+  async runTurn({
+    userInput,
+    systemPrompt,
+    transcript,
+    onFirstOutput,
+  }: RunTurnInput): Promise<TurnResult> {
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt + OPENAI_EXTRACTION_TAIL },
       ...transcript.map((e) => ({ role: e.role, content: e.text }) as OpenAI.Chat.ChatCompletionMessageParam),
@@ -78,11 +83,16 @@ export class OpenAIBackend implements ChatBackend {
     });
 
     let fullContent = "";
+    let firstOutputFired = false;
     const toolCalls: Array<{ index: number; arguments: string }> = [];
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
       if (delta?.content) {
+        if (!firstOutputFired) {
+          firstOutputFired = true;
+          onFirstOutput?.();
+        }
         process.stdout.write(delta.content);
         fullContent += delta.content;
       }
@@ -93,6 +103,7 @@ export class OpenAIBackend implements ChatBackend {
         }
       }
     }
+    if (!firstOutputFired) onFirstOutput?.();
     process.stdout.write("\n");
 
     const nodes: ExtractedNode[] = [];

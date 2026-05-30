@@ -138,6 +138,7 @@ export class CodexBackend implements ChatBackend {
       throw new Error(`codex returned non-JSON output: ${text.slice(0, 200)}`);
     }
 
+    input.onFirstOutput?.();
     process.stdout.write(parsed.reply + "\n");
 
     const nodes: ExtractedNode[] = parsed.node
