@@ -1,4 +1,9 @@
 // @vitest-environment node
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import Database from "better-sqlite3";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
@@ -44,21 +49,147 @@ function makeNode(overrides: Partial<DumpNode> = {}): DumpNode {
   };
 }
 
+function tempDbPath(): { dir: string; path: string } {
+  const dir = mkdtempSync(join(tmpdir(), "braindump-store-"));
+  return { dir, path: join(dir, "dump.db") };
+}
+
 describe("openDb", () => {
   it("creates schema cleanly on a fresh in-memory database", () => {
     expect(getNodeCount(db)).toBe(0);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
   });
 
-  it("is idempotent — calling on an existing db does not throw", () => {
-    const node = makeNode();
-    insertNode(db, node);
-    // Re-run the schema by opening a second handle on the same memory db is not possible,
-    // but we can verify that running the schema twice on the same handle is safe:
-    expect(() => {
-      // openDb internally runs the schema; we can re-exec it here without error
-      db.exec("CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, tag TEXT NOT NULL, content TEXT NOT NULL, parent_id TEXT, captured_at INTEGER NOT NULL, memory_date TEXT, memory_date_granularity TEXT, segment TEXT NOT NULL DEFAULT 'life_story', depth INTEGER NOT NULL)");
-    }).not.toThrow();
-    expect(getNodeCount(db)).toBe(1);
+  it("is idempotent when reopening an existing versioned database", () => {
+    const tmp = tempDbPath();
+    try {
+      const db1 = openDb(tmp.path);
+      insertNode(db1, makeNode({ id: "existing" }));
+      db1.close();
+
+      const db2 = openDb(tmp.path);
+      expect(db2.pragma("user_version", { simple: true })).toBe(1);
+      expect(getNodeCount(db2)).toBe(1);
+      expect(getNodeById(db2, "existing")?.tag).toBe("quiet joy");
+      db2.close();
+    } finally {
+      rmSync(tmp.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an unversioned current-shape database and rebuilds FTS", () => {
+    const tmp = tempDbPath();
+    try {
+      const raw = new Database(tmp.path);
+      raw.exec(`
+        CREATE TABLE nodes (
+          id TEXT PRIMARY KEY,
+          tag TEXT NOT NULL,
+          content TEXT NOT NULL,
+          parent_id TEXT REFERENCES nodes(id),
+          captured_at INTEGER NOT NULL,
+          memory_date TEXT,
+          memory_date_granularity TEXT,
+          segment TEXT NOT NULL DEFAULT 'life_story',
+          depth INTEGER NOT NULL
+        );
+      `);
+      raw
+        .prepare(
+          `INSERT INTO nodes (
+            id, tag, content, parent_id, captured_at,
+            memory_date, memory_date_granularity, segment, depth
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "legacy",
+          "quiet joy",
+          "grandmother in the garden",
+          null,
+          1000,
+          null,
+          null,
+          "life_story",
+          0,
+        );
+      raw.close();
+
+      const upgraded = openDb(tmp.path);
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(1);
+      expect(getNodeById(upgraded, "legacy")?.content).toBe(
+        "grandmother in the garden",
+      );
+      expect(searchNodes(upgraded, "grandmother", 5).map((n) => n.id)).toEqual([
+        "legacy",
+      ]);
+      upgraded.close();
+    } finally {
+      rmSync(tmp.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds missing v1 columns when upgrading an older unversioned database", () => {
+    const tmp = tempDbPath();
+    try {
+      const raw = new Database(tmp.path);
+      raw.exec(`
+        CREATE TABLE nodes (
+          id TEXT PRIMARY KEY,
+          tag TEXT NOT NULL,
+          content TEXT NOT NULL,
+          parent_id TEXT REFERENCES nodes(id),
+          captured_at INTEGER NOT NULL
+        );
+      `);
+      raw
+        .prepare(
+          `INSERT INTO nodes (
+            id, tag, content, parent_id, captured_at
+          ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "legacy-minimal",
+          "quiet joy",
+          "grandmother in the kitchen",
+          null,
+          1000,
+        );
+      raw.close();
+
+      const upgraded = openDb(tmp.path);
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(1);
+      expect(getNodeById(upgraded, "legacy-minimal")).toEqual({
+        id: "legacy-minimal",
+        tag: "quiet joy",
+        content: "grandmother in the kitchen",
+        parentId: null,
+        capturedAt: 1000,
+        memoryDate: null,
+        memoryDateGranularity: null,
+        segment: "life_story",
+        depth: 0,
+      });
+      expect(searchNodes(upgraded, "kitchen", 5).map((n) => n.id)).toEqual([
+        "legacy-minimal",
+      ]);
+      upgraded.close();
+    } finally {
+      rmSync(tmp.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to open a database from a newer schema version", () => {
+    const tmp = tempDbPath();
+    try {
+      const raw = new Database(tmp.path);
+      raw.pragma("user_version = 999");
+      raw.close();
+      expect(() => openDb(tmp.path)).toThrow(
+        /Unsupported database schema version 999/,
+      );
+    } finally {
+      rmSync(tmp.dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -83,7 +214,11 @@ describe("insertNode + getNodeById", () => {
   });
 
   it("persists null values for memory_date fields", () => {
-    const node = makeNode({ id: "node-2", memoryDate: null, memoryDateGranularity: null });
+    const node = makeNode({
+      id: "node-2",
+      memoryDate: null,
+      memoryDateGranularity: null,
+    });
     insertNode(db, node);
     const fetched = getNodeById(db, "node-2");
     expect(fetched?.memoryDate).toBeNull();
@@ -141,9 +276,18 @@ describe("getTagCounts", () => {
   });
 
   it("counts only the matching segment when filtered", () => {
-    insertNode(db, makeNode({ id: "a", tag: "quiet joy", segment: "life_story" }));
-    insertNode(db, makeNode({ id: "b", tag: "quiet joy", segment: "life_story" }));
-    insertNode(db, makeNode({ id: "c", tag: "lucid flight", segment: "dream_journal" }));
+    insertNode(
+      db,
+      makeNode({ id: "a", tag: "quiet joy", segment: "life_story" }),
+    );
+    insertNode(
+      db,
+      makeNode({ id: "b", tag: "quiet joy", segment: "life_story" }),
+    );
+    insertNode(
+      db,
+      makeNode({ id: "c", tag: "lucid flight", segment: "dream_journal" }),
+    );
     const counts = getTagCounts(db, "life_story");
     expect(counts).toHaveLength(1);
     expect(counts[0].tag).toBe("quiet joy");
@@ -171,10 +315,15 @@ describe("getNodeCount", () => {
 
 describe("FTS5 sync via triggers", () => {
   it("indexes content on INSERT and returns rowid on MATCH", () => {
-    insertNode(db, makeNode({ id: "a", content: "I remember my grandmother's hands" }));
+    insertNode(
+      db,
+      makeNode({ id: "a", content: "I remember my grandmother's hands" }),
+    );
     insertNode(db, makeNode({ id: "b", content: "the smell of fresh bread" }));
     const matches = db
-      .prepare("SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH 'grandmother'")
+      .prepare(
+        "SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH 'grandmother'",
+      )
       .all() as { rowid: number }[];
     expect(matches).toHaveLength(1);
   });
@@ -183,7 +332,9 @@ describe("FTS5 sync via triggers", () => {
     insertNode(db, makeNode({ id: "a", content: "grandmother story" }));
     db.prepare("DELETE FROM nodes WHERE id = ?").run("a");
     const matches = db
-      .prepare("SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH 'grandmother'")
+      .prepare(
+        "SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH 'grandmother'",
+      )
       .all();
     expect(matches).toHaveLength(0);
   });
@@ -191,8 +342,14 @@ describe("FTS5 sync via triggers", () => {
 
 describe("searchNodes", () => {
   it("returns nodes whose content matches the query", () => {
-    insertNode(db, makeNode({ id: "a", content: "I remember my grandmother's hands" }));
-    insertNode(db, makeNode({ id: "b", content: "driving to school every morning" }));
+    insertNode(
+      db,
+      makeNode({ id: "a", content: "I remember my grandmother's hands" }),
+    );
+    insertNode(
+      db,
+      makeNode({ id: "b", content: "driving to school every morning" }),
+    );
     const results = searchNodes(db, "grandmother hands", 5);
     expect(results.map((n) => n.id)).toContain("a");
     expect(results.map((n) => n.id)).not.toContain("b");
@@ -211,15 +368,32 @@ describe("searchNodes", () => {
   });
 
   it("filters by segment when provided", () => {
-    insertNode(db, makeNode({ id: "a", content: "grandmother story", segment: "life_story" }));
-    insertNode(db, makeNode({ id: "b", content: "grandmother story", segment: "dream_journal" }));
+    insertNode(
+      db,
+      makeNode({
+        id: "a",
+        content: "grandmother story",
+        segment: "life_story",
+      }),
+    );
+    insertNode(
+      db,
+      makeNode({
+        id: "b",
+        content: "grandmother story",
+        segment: "dream_journal",
+      }),
+    );
     const results = searchNodes(db, "grandmother", 5, "life_story");
     expect(results.map((n) => n.id)).toEqual(["a"]);
   });
 
   it("respects the limit argument", () => {
     for (let i = 0; i < 5; i++) {
-      insertNode(db, makeNode({ id: `n${i}`, content: `grandmother story number ${i}` }));
+      insertNode(
+        db,
+        makeNode({ id: `n${i}`, content: `grandmother story number ${i}` }),
+      );
     }
     const results = searchNodes(db, "grandmother", 3);
     expect(results).toHaveLength(3);
@@ -230,7 +404,10 @@ describe("searchNodes", () => {
   });
 
   it("strips FTS5 special characters and still matches", () => {
-    insertNode(db, makeNode({ id: "a", content: "I remember my grandmother's hands" }));
+    insertNode(
+      db,
+      makeNode({ id: "a", content: "I remember my grandmother's hands" }),
+    );
     const results = searchNodes(db, '"grandmother*"', 5);
     expect(results.map((n) => n.id)).toContain("a");
   });
@@ -322,7 +499,14 @@ describe("importFromJson", () => {
       createdAt: 1000,
       updatedAt: 2000,
       nodes: [
-        { id: "v1-node", timestamp: 5555, tag: "fierce belonging", content: "the table", depth: 0, parentId: null },
+        {
+          id: "v1-node",
+          timestamp: 5555,
+          tag: "fierce belonging",
+          content: "the table",
+          depth: 0,
+          parentId: null,
+        },
       ],
     };
     importFromJson(db, legacy);
@@ -349,8 +533,22 @@ describe("importFromJson", () => {
       createdAt: 1000,
       updatedAt: 2000,
       nodes: [
-        { id: "child", timestamp: 2000, tag: "echo", content: "child node", depth: 1, parentId: "root" },
-        { id: "root", timestamp: 1000, tag: "root tag", content: "root node", depth: 0, parentId: null },
+        {
+          id: "child",
+          timestamp: 2000,
+          tag: "echo",
+          content: "child node",
+          depth: 1,
+          parentId: "root",
+        },
+        {
+          id: "root",
+          timestamp: 1000,
+          tag: "root tag",
+          content: "root node",
+          depth: 0,
+          parentId: null,
+        },
       ],
     };
     expect(() => importFromJson(db, legacy)).not.toThrow();
@@ -383,7 +581,9 @@ describe("searchNodesByVector", () => {
     insertEmbedding(db, "a", vec);
     insertEmbedding(db, "b", vec);
     const results = searchNodesByVector(db, vec, 5);
-    expect(results.map((n) => n.id)).toEqual(expect.arrayContaining(["a", "b"]));
+    expect(results.map((n) => n.id)).toEqual(
+      expect.arrayContaining(["a", "b"]),
+    );
   });
 
   it("filters results to the specified segment", () => {

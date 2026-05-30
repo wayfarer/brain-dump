@@ -64,6 +64,11 @@ The inverse query also matters: starting from a free-text phrase (`"grandmother"
 
 SQLite via `better-sqlite3` — single file (`dump.db`), no server, WAL mode. Indexed lookups on `id`, `parent_id`, `tag`, `captured_at`, and `segment`. FTS5 full-text search on `content`, kept in sync via insert/update/delete triggers.
 
+The database schema is versioned with SQLite `PRAGMA user_version`. Startup runs
+the migration path before any reads or writes, so existing databases are brought
+up to the current schema in place. Databases from newer app versions are refused
+with a clear error rather than opened unsafely.
+
 JSON is the canonical **export/import** format. `exportToJson` serializes the full database to a `DumpRecord` (version 2). `importFromJson` loads a v1 or v2 JSON record into SQLite — idempotent, runs in a transaction. On first startup, if a legacy `dump.json` is present and the database is empty, it is migrated automatically and renamed to `dump.json.migrated`.
 
 Both `dump.db` and exported JSON are written relative to your **current working directory** — not the project install path. If you use `npm link`, run export from the directory where you keep your data.
