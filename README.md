@@ -77,6 +77,28 @@ src/app/  Splash page (Next.js, static for now)
 
 The CLI is the primary capture interface. The web app is a splash; a graph/timeline UI is out of current scope.
 
+## Current Status
+
+The project is CLI-first. The README describes the intended capture, storage,
+search, import, and export behavior for the interview system. The `src/app`
+surface is intentionally minimal right now: it renders a static splash page and
+does not read from the SQLite database.
+
+The web app should not be treated as the primary product surface yet. Future web
+work can add graph, timeline, search, or export views, but those are not part of
+the current scope.
+
+## Documentation Notes
+
+The schema rules below are the source of truth for the current data model:
+
+- `captured_at` records when the interview captured the node.
+- `memory_date` records when the remembered event occurred, if known.
+- `memory_date` and `memory_date_granularity` are always null together.
+- `depth` is stored at insert time because nodes are append-only.
+- `segment` is the configured interview domain.
+- `tag` is the per-node thematic label extracted from the response.
+
 ## Running
 
 ### Install
