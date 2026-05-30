@@ -1,7 +1,10 @@
 {
-  "name": "brain-dump",
+  "name": "@drudgle/braindump",
   "version": "0.1.0",
   "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "braindump": "./bin/braindump.mjs"
   },

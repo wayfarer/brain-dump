@@ -1,13 +1,22 @@
 import "dotenv/config";
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as readline from "node:readline";
 
 import OpenAI from "openai";
 
+import { createSession, type BackendPreference, type ChatSession } from "./backends/index.js";
 import { buildOpeningMessage, runTurn, SEGMENTS } from "./interview.js";
 import type { InterviewState, TurnPresenter } from "./interview.js";
-import { getNodeCount, getRecentNodes, getTagCounts, importFromJson, openDb, searchNodes } from "./store.js";
+import {
+  exportToJson,
+  getNodeCount,
+  getRecentNodes,
+  getTagCounts,
+  importFromJson,
+  openDb,
+  searchNodes,
+} from "./store.js";
 import type { LegacyDumpRecord } from "./store.js";
 import { banner, c, formatNodeLine, savedErrorLine, savedLine, Spinner } from "./ui.js";
 import type { DumpRecord } from "./types.js";
@@ -18,12 +27,24 @@ const HELP = `  ${c.cyan("/list")} ${c.dim("[n]")}        recent memories (defau
   ${c.cyan("/help")}            show this help
   ${c.cyan("/exit")}            save and quit`;
 
+function runExport(outPath: string): void {
+  const db = openDb();
+  const record = exportToJson(db);
+  writeFileSync(outPath, JSON.stringify(record, null, 2) + "\n", "utf-8");
+  db.close();
+  console.log(`Exported ${record.nodes.length} node${record.nodes.length !== 1 ? "s" : ""} to ${outPath}`);
+}
+
 async function main(): Promise<void> {
-  if (!process.env.OPENAI_API_KEY) {
-    console.error(
-      "Error: OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.",
+  const exportFlagIdx = process.argv.indexOf("--export");
+  if (exportFlagIdx !== -1) {
+    const nextArg = process.argv[exportFlagIdx + 1];
+    const outPath = resolve(
+      process.cwd(),
+      nextArg && !nextArg.startsWith("-") ? nextArg : "dump-export.json",
     );
-    process.exit(1);
+    runExport(outPath);
+    return;
   }
 
   const segmentFlagIdx = process.argv.indexOf("--segment");
@@ -33,6 +54,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const segment = segmentArg;
+
+  const backendFlagIdx = process.argv.indexOf("--backend");
+  const backendArg =
+    (backendFlagIdx !== -1 ? process.argv[backendFlagIdx + 1] : process.env.BRAINDUMP_BACKEND) ?? "auto";
+  if (!["auto", "codex", "openai"].includes(backendArg)) {
+    console.error(`Unknown backend "${backendArg}". Available: auto, codex, openai`);
+    process.exit(1);
+  }
+  const preference = backendArg as BackendPreference;
 
   const db = openDb();
 
@@ -44,17 +74,34 @@ async function main(): Promise<void> {
     console.log(`Migrated ${count} node${count !== 1 ? "s" : ""} from dump.json.\n`);
   }
 
-  const client = new OpenAI();
-  const lastNode = getRecentNodes(db, 1, segment)[0];
+  const client = process.env.OPENAI_API_KEY ? new OpenAI() : null;
 
+  let session: ChatSession;
+  let primaryName: "codex" | "openai";
+  try {
+    ({ session, primaryName } = await createSession({ preference, openai: client }));
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    db.close();
+    process.exit(1);
+  }
+
+  const lastNode = getRecentNodes(db, 1, segment)[0];
   const state: InterviewState = {
-    history: [],
     db,
     lastParentId: lastNode?.id ?? null,
     segment,
   };
 
+  const authLine =
+    primaryName === "codex"
+      ? client
+        ? "Codex subscription · API-key fallback"
+        : "Codex subscription"
+      : "OpenAI API key";
   console.log(banner(segment));
+  console.log(c.dim(`· ${authLine}`));
+  console.log();
   console.log(buildOpeningMessage(db, segment));
   console.log(c.dim("Type /help for commands."));
   console.log();
@@ -160,7 +207,7 @@ async function main(): Promise<void> {
       };
       spinner.start("thinking…");
       try {
-        await runTurn(client, state, input, presenter);
+        await runTurn(session, client, state, input, presenter);
       } finally {
         spinner.stop();
         console.log();
@@ -176,6 +223,7 @@ async function main(): Promise<void> {
 
   rl.on("close", () => {
     void turnLock.then(() => {
+      session.close();
       db.close();
       console.log("\n\nSession saved. See you next time.\n");
       process.exit(0);
