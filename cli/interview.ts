@@ -227,8 +227,16 @@ export async function runTurn(
     userInput,
     embedding ?? undefined,
   );
-  const result = await session.turn(userInput, systemPrompt, () => {
-    presenter?.onFirstToken?.();
+  const result = await session.turn(userInput, systemPrompt, {
+    onFirstText: () => presenter?.onFirstToken?.(),
+    onText: (text) => {
+      if (presenter?.onContent) {
+        presenter.onContent(text);
+      } else {
+        process.stdout.write(text);
+      }
+    },
   });
+  process.stdout.write("\n");
   persistNodes(state.db, state, result.nodes, embedding, presenter);
 }

@@ -2,11 +2,13 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import type OpenAI from "openai";
 
+import type { ChatSession } from "./backends/index.js";
 import type { ExtractedNode } from "./backends/types.js";
 import {
   buildSystemPrompt,
   buildOpeningMessage,
   persistNodes,
+  runTurn,
   SEGMENTS,
   type InterviewState,
 } from "./interview.js";
@@ -63,12 +65,15 @@ function extracted(overrides: Partial<ExtractedNode> = {}): ExtractedNode {
 }
 
 let db: Db;
+let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   db = openDb(":memory:");
+  stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 });
 
 afterEach(() => {
+  stdoutSpy.mockRestore();
   db.close();
 });
 
@@ -318,5 +323,44 @@ describe("persistNodes", () => {
       persistNodes(db, makeState(), [extracted()], makeMockEmbedding()),
     ).not.toThrow();
     expect(getRecentNodes(db, 1)).toHaveLength(1);
+  });
+});
+
+// --- runTurn presentation bridge ---
+
+describe("runTurn", () => {
+  it("bridges backend text events to the presenter", async () => {
+    const onFirstToken = vi.fn();
+    const onContent = vi.fn();
+    const session = {
+      turn: vi.fn(async (_userInput: string, _systemPrompt: string, events) => {
+        events?.onFirstText?.();
+        events?.onText?.("Tell me more.");
+        return { question: "Tell me more.", nodes: [] };
+      }),
+    } as unknown as ChatSession;
+
+    await runTurn(session, null, makeState(), "hello", {
+      onFirstToken,
+      onContent,
+    });
+
+    expect(onFirstToken).toHaveBeenCalledTimes(1);
+    expect(onContent).toHaveBeenCalledWith("Tell me more.");
+    expect(stdoutSpy).toHaveBeenCalledWith("\n");
+  });
+
+  it("writes backend text to stdout when no content presenter is provided", async () => {
+    const session = {
+      turn: vi.fn(async (_userInput: string, _systemPrompt: string, events) => {
+        events?.onText?.("Tell me more.");
+        return { question: "Tell me more.", nodes: [] };
+      }),
+    } as unknown as ChatSession;
+
+    await runTurn(session, null, makeState(), "hello");
+
+    expect(stdoutSpy).toHaveBeenCalledWith("Tell me more.");
+    expect(stdoutSpy).toHaveBeenCalledWith("\n");
   });
 });

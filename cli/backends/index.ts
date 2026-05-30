@@ -16,6 +16,7 @@ import { OpenAIBackend } from "./openai.js";
 import {
   type ChatBackend,
   type TranscriptEntry,
+  type TurnEvents,
   type TurnResult,
   UsageLimitExceededError,
 } from "./types.js";
@@ -43,13 +44,13 @@ export class ChatSession {
   async turn(
     userInput: string,
     systemPrompt: string,
-    onFirstOutput?: () => void,
+    events?: TurnEvents,
   ): Promise<TurnResult> {
     const input = {
       userInput,
       systemPrompt,
       transcript: [...this.transcript],
-      onFirstOutput,
+      events,
     };
 
     let result: TurnResult;

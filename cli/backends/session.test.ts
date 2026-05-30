@@ -88,6 +88,31 @@ describe("ChatSession", () => {
     ]);
   });
 
+  it("passes turn events through to the active backend", async () => {
+    const onText = vi.fn();
+    const primary = new FakeBackend("codex", (input) => {
+      input.events?.onText?.("hello");
+      return reply("hello");
+    });
+    const session = new ChatSession(primary, null);
+    await session.turn("u1", "P", { onText });
+    expect(onText).toHaveBeenCalledWith("hello");
+  });
+
+  it("reuses turn events when falling back", async () => {
+    const onText = vi.fn();
+    const primary = new FakeBackend("codex", () => {
+      throw new UsageLimitExceededError();
+    });
+    const fallback = new FakeBackend("openai", (input) => {
+      input.events?.onText?.("fallback");
+      return reply("fallback");
+    });
+    const session = new ChatSession(primary, fallback);
+    await session.turn("u1", "P", { onText });
+    expect(onText).toHaveBeenCalledWith("fallback");
+  });
+
   it("throws a helpful error on usage-limit when there is no fallback", async () => {
     const primary = new FakeBackend("codex", () => {
       throw new UsageLimitExceededError();
