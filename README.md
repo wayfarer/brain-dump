@@ -66,6 +66,33 @@ SQLite via `better-sqlite3` — single file (`dump.db`), no server, WAL mode. In
 
 JSON is the canonical **export/import** format. `exportToJson` serializes the full database to a `DumpRecord` (version 2). `importFromJson` loads a v1 or v2 JSON record into SQLite — idempotent, runs in a transaction. On first startup, if a legacy `dump.json` is present and the database is empty, it is migrated automatically and renamed to `dump.json.migrated`.
 
+Both `dump.db` and exported JSON are written relative to your **current working directory** — not the project install path. If you use `npm link`, run export from the directory where you keep your data.
+
+### Export & portable memory
+
+Brain Dump is designed so your record stays **yours**: a plain JSON file you can back up, move between machines, inspect, and plug into other tools. That matters because the value compounds over time — tags, follow-up chains, and memory dates form a structured personal context that is far more useful for personalization than a raw chat transcript.
+
+What you can do with an export:
+
+- **Back up** before migrating machines or reinstalling
+- **Personalize other AI tools** — paste tagged memories into a system prompt, feed the JSON into a RAG pipeline, or build a custom context loader
+- **Analyze outside the app** — query by tag, sort by `memory_date`, or visualize branches in your own UI
+- **Share selectively** — hand someone a redacted JSON slice without giving up your live database
+
+The export includes every node across all segments, with stable UUIDs, so re-importing into a fresh `dump.db` is safe and idempotent (`INSERT OR IGNORE`).
+
+### Export & import
+
+Export the full record to JSON (no API key required):
+
+```sh
+braindump --export                        # writes ./dump-export.json
+braindump --export ~/backups/my-dump.json
+npm run dump -- --export backup.json
+```
+
+Import happens automatically on first startup: place a v1 or v2 JSON file at `./dump.json` before `dump.db` exists, and the CLI migrates it into SQLite and renames the file to `dump.json.migrated`. To merge an export into an existing database programmatically, use `importFromJson` from `cli/store.ts` — it skips nodes whose IDs are already present.
+
 ## Layout
 
 ```
@@ -112,6 +139,7 @@ Then from anywhere:
 ```sh
 braindump                             # Start a life_story session (default)
 braindump --segment dream_journal     # Start a dream_journal session
+braindump --export my-backup.json     # Export all nodes to JSON (no API key)
 ```
 
 Or without installing, from inside the project:
@@ -119,6 +147,7 @@ Or without installing, from inside the project:
 ```sh
 npm run dump
 npm run dump -- --segment dream_journal
+npm run dump -- --export backup.json
 ```
 
 ```sh
