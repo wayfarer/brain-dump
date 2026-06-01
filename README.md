@@ -50,6 +50,18 @@ Human memory rarely surfaces with time-of-day precision. The granularity ladder 
 
 `depth` is stored at insert time by the caller. Nodes are append-only — `parent_id` never changes after insert — so the stored value cannot drift from the actual tree structure.
 
+### Branching
+
+Within a segment, the interview continues the most recent branch by default.
+When a backend extracts a node without a valid explicit parent, the CLI attaches
+it to the session's `lastParentId` and increments `depth`. A node becomes a new
+branch root only when there is no available parent, such as the first captured
+node in a segment.
+
+The interviewer may ask to continue an open thread or move to a new area, but
+branch selection is currently implicit in the persisted chain rather than a
+separate user command.
+
 ### Segment vs. tag
 
 `segment` is the interview domain: coarse, configured before the session starts (e.g. `life_story`, `dream_journal`). `tag` is the thematic label the LLM assigns to a specific node: fine-grained and assigned per response (e.g. `"fierce belonging"`, `"quiet shame"`). Segment is the container; tag is the lens.
@@ -103,7 +115,7 @@ Import happens automatically on first startup: place a v1 or v2 JSON file at `./
 ```
 cli/      Interview REPL — Codex-subscription or OpenAI chat backend, node extraction
 cli/backends/  Chat-backend seam: Codex app-server, OpenAI API, fallback session
-study/    Data model comparison study (current focus)
+study/    Small type-model study for possible future web graph work
 src/app/  Splash page (Next.js, static for now)
 ```
 
@@ -128,6 +140,7 @@ The schema rules below are the source of truth for the current data model:
 - `memory_date` records when the remembered event occurred, if known.
 - `memory_date` and `memory_date_granularity` are always null together.
 - `depth` is stored at insert time because nodes are append-only.
+- `parent_id` continues the current branch by default using the session's last captured node.
 - `segment` is the configured interview domain.
 - `tag` is the per-node thematic label extracted from the response.
 
