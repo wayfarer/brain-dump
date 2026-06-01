@@ -1,17 +1,32 @@
 # Brain Dump
 
-A reverse chatbot that interviews you to build a structured, queryable record of your life — not a transcript, but a tagged chronology of moments, memories, and facts that can be searched, grouped, and exported.
+A reverse chatbot that interviews you to build a structured, queryable record of a subject — not a transcript, but a tagged chronology of moments, memories, facts, decisions, and ideas that can be searched, grouped, and exported.
 
 ## Concept
 
-Most chat interfaces let the user drive. Brain Dump inverts that: the model is the interviewer, asking one good question at a time. The user remembers and responds. Out of that exchange a structured record accumulates.
+Most chat interfaces let the user drive. Brain Dump inverts that: the model is the interviewer, asking one good question at a time. The user remembers, explains, or reasons aloud. Out of that exchange a structured record accumulates.
+
+## Product Thesis
+
+Brain Dump starts with autobiographical memory because it is the hardest capture
+problem: broad scope, fuzzy chronology, emotional context, recurring themes,
+partial dates, and long-range connections across a lifetime. If the model can
+handle that, narrower subjects like product design sessions, meeting outcomes,
+project retrospectives, research notes, family history, dream journals, medical
+history, and synthetic logs become simpler variants of the same structured
+interview pattern.
+
+The goal is not a generic assistant chat. Free text is interview material. New
+capabilities should preserve that capture contract by adding subjects, segments,
+or interview skills that alter the path of questioning while still producing a
+portable structured dump.
 
 ## Segments
 
 A **segment** is an interview domain — a configured opening question, system prompt, and tag style. Different segments capture different kinds of material but share the same underlying schema.
 
 - **Life Story** (default, always available) — opens with the hardcoded question `"What is your first memory?"`. Its record serves as the user's foundational memory context that other segments can draw on as background.
-- **Future segments** — dream journals, project retrospectives, family history, medical history, and other directed-interview domains. Each carries its own prompt configuration but writes into the same data model.
+- **Future segments** — dream journals, project retrospectives, product design sessions, meeting outcomes, family history, medical history, and other directed-interview domains. Each carries its own prompt configuration but writes into the same data model.
 
 ## Data Model
 
@@ -85,16 +100,16 @@ JSON is the canonical **export/import** format. `exportToJson` serializes the fu
 
 Both `dump.db` and exported JSON are written relative to your **current working directory** — not the project install path. If you use `npm link`, run export from the directory where you keep your data.
 
-### Export & portable memory
+### Export & portability
 
-Brain Dump is designed so your record stays **yours**: a plain JSON file you can back up, move between machines, inspect, and plug into other tools. That matters because the value compounds over time — tags, follow-up chains, and memory dates form a structured personal context that is far more useful for personalization than a raw chat transcript.
+Brain Dump is designed so your record stays **yours**: a plain JSON file you can back up, move between machines, inspect, share selectively, and plug into other tools or agent harnesses. That matters because the value compounds over time — tags, follow-up chains, dates, and subject-specific segments form structured context that is far more useful for personalization and collaboration than a raw chat transcript.
 
 What you can do with an export:
 
 - **Back up** before migrating machines or reinstalling
-- **Personalize other AI tools** — paste tagged memories into a system prompt, feed the JSON into a RAG pipeline, or build a custom context loader
-- **Analyze outside the app** — query by tag, sort by `memory_date`, or visualize branches in your own UI
-- **Share selectively** — hand someone a redacted JSON slice without giving up your live database
+- **Personalize other AI tools** — paste tagged memories or subject notes into a system prompt, feed the JSON into a RAG pipeline, or build a custom context loader
+- **Analyze outside the app** — query by tag, sort by `memory_date`, visualize branches, or summarize decisions in your own UI
+- **Share selectively** — hand someone a redacted JSON slice of a brainstorming session, meeting, project, or life-history branch without giving up your live database
 
 The export includes every node across all segments, with stable UUIDs, so re-importing into a fresh `dump.db` is safe and idempotent (`INSERT OR IGNORE`).
 
