@@ -93,7 +93,7 @@ export function formatContextEntry(
     : null;
   const parts = [
     `- depth ${node.depth}`,
-    `"${normalizeContextText(node.tag)}"`,
+    `"${normalizeContextText(node.tag).replace(/"/g, "'")}"`,
     ...(datePart ? [datePart] : []),
     truncateText(normalizeContextText(node.content), maxContentChars),
   ];
@@ -114,9 +114,7 @@ export function formatContextBlock(
       .map((n) => formatContextEntry(n, maxContentChars))
       .join("\n");
     if (block.length <= maxSectionChars) return block;
-    const next = Math.max(MIN_CONTENT_CHARS, Math.floor(maxContentChars / 2));
-    if (next === maxContentChars) break;
-    maxContentChars = next;
+    maxContentChars = Math.max(MIN_CONTENT_CHARS, Math.floor(maxContentChars / 2));
   }
 
   const block = nodes

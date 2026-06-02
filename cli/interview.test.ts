@@ -143,6 +143,15 @@ describe("formatContextEntry", () => {
     expect(line).toContain("early 1980s (decade)");
     expect(line.split("\n")).toHaveLength(1);
   });
+
+  it("replaces double quotes in tag to prevent context boundary ambiguity", () => {
+    const line = formatContextEntry(
+      makeNode({ tag: 'hope "for" belonging' }),
+      240,
+    );
+    expect(line).toContain("\"hope 'for' belonging\"");
+    expect(line).not.toMatch(/"hope "for"/);
+  });
 });
 
 describe("formatContextBlock", () => {
