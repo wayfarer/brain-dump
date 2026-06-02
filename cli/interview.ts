@@ -59,6 +59,75 @@ const VALID_GRANULARITIES = new Set<string>([
   "datetime",
 ]);
 
+const CONTEXT_NODE_LIMIT = 10;
+const DEFAULT_MAX_CONTENT_CHARS = 240;
+const DEFAULT_MAX_SECTION_CHARS = 3200;
+const MIN_CONTENT_CHARS = 40;
+
+export interface FormatContextBlockOptions {
+  maxContentCharsPerNode?: number;
+  maxSectionChars?: number;
+}
+
+/** Truncate text to maxChars, appending "..." when shortened. */
+export function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 3) return text.slice(0, maxChars);
+  return text.slice(0, maxChars - 3) + "...";
+}
+
+/** One plain-text context line for a captured node (no ANSI). */
+export function formatContextEntry(
+  node: DumpNode,
+  maxContentChars: number,
+): string {
+  const datePart = node.memoryDate
+    ? node.memoryDateGranularity
+      ? `${node.memoryDate} (${node.memoryDateGranularity})`
+      : node.memoryDate
+    : null;
+  const parts = [
+    `- depth ${node.depth}`,
+    `"${node.tag}"`,
+    ...(datePart ? [datePart] : []),
+    truncateText(node.content, maxContentChars),
+  ];
+  return parts.join(" | ");
+}
+
+/** Format retrieved nodes into a bounded context block for the system prompt. */
+export function formatContextBlock(
+  nodes: DumpNode[],
+  opts: FormatContextBlockOptions = {},
+): string {
+  const maxSectionChars = opts.maxSectionChars ?? DEFAULT_MAX_SECTION_CHARS;
+  let maxContentChars =
+    opts.maxContentCharsPerNode ?? DEFAULT_MAX_CONTENT_CHARS;
+
+  while (maxContentChars > MIN_CONTENT_CHARS) {
+    const block = nodes
+      .map((n) => formatContextEntry(n, maxContentChars))
+      .join("\n");
+    if (block.length <= maxSectionChars) return block;
+    const next = Math.max(MIN_CONTENT_CHARS, Math.floor(maxContentChars / 2));
+    if (next === maxContentChars) break;
+    maxContentChars = next;
+  }
+
+  const block = nodes
+    .map((n) => formatContextEntry(n, MIN_CONTENT_CHARS))
+    .join("\n");
+  if (block.length <= maxSectionChars) return block;
+
+  let trimmed = block;
+  while (trimmed.length > maxSectionChars && trimmed.includes("\n")) {
+    trimmed = trimmed.slice(0, trimmed.lastIndexOf("\n"));
+  }
+  return trimmed.length > maxSectionChars
+    ? truncateText(trimmed, maxSectionChars)
+    : trimmed;
+}
+
 export interface InterviewState {
   db: Db;
   lastParentId: string | null;
@@ -122,25 +191,25 @@ export async function buildSystemPrompt(
 
     if (searchResults.length > 0) {
       const searchedIds = new Set(searchResults.map((n) => n.id));
-      const filler = getRecentNodes(db, 10, segment).filter(
+      const filler = getRecentNodes(db, CONTEXT_NODE_LIMIT, segment).filter(
         (n) => !searchedIds.has(n.id),
       );
-      contextNodes = [...searchResults, ...filler].slice(0, 10).reverse();
+      contextNodes = [...searchResults, ...filler]
+        .slice(0, CONTEXT_NODE_LIMIT)
+        .reverse();
     } else {
-      contextNodes = getRecentNodes(db, 10, segment).reverse();
+      contextNodes = getRecentNodes(db, CONTEXT_NODE_LIMIT, segment).reverse();
     }
   } else {
-    contextNodes = getRecentNodes(db, 10, segment).reverse();
+    contextNodes = getRecentNodes(db, CONTEXT_NODE_LIMIT, segment).reverse();
   }
 
-  const summary = contextNodes
-    .map((n) => `"${n.tag}" — depth ${n.depth}`)
-    .join("\n");
+  const contextBlock = formatContextBlock(contextNodes);
 
   return `${BASE_SYSTEM_PROMPT}
 
-Context from previous sessions (do not reference this list directly in your questions):
-${summary}
+Context from previous sessions (use to inform your next question; do not quote or enumerate this list back to the user):
+${contextBlock}
 
 Pick up naturally: continue an open thread or open a new area of their life not yet explored.`;
 }

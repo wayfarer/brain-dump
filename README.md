@@ -87,6 +87,8 @@ A tag is a short normalized label — `"sudden loss"`, `"fierce belonging"`, `"q
 
 The inverse query also matters: starting from a free-text phrase (`"grandmother"`, `"the cabin"`) and pulling back the *set of tags* whose nodes mention it. The LLM uses this during an interview to surface relevant prior themes without the user having to name them. Full-text search over `content` is what enables that pattern.
 
+During an interview, prior captures in the active segment are retrieved (vector search with FTS5 fallback) and injected into the system prompt as **truncated excerpts** — tag, optional memory date, depth, and a capped content preview — so the interviewer can ask informed follow-ups across sessions, not only within the current transcript.
+
 ## Storage
 
 SQLite via `better-sqlite3` — single file (`dump.db`), no server, WAL mode. Indexed lookups on `id`, `parent_id`, `tag`, `captured_at`, and `segment`. FTS5 full-text search on `content`, kept in sync via insert/update/delete triggers.

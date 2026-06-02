@@ -36,7 +36,7 @@ Brain Dump is a **reverse chatbot**: it interviews the user to extract and persi
 user input
   → embed with text-embedding-3-small
   → vector search + FTS5 fallback (cli/store.ts)
-  → build context-aware system prompt (cli/interview.ts: buildSystemPrompt)
+  → build context-aware system prompt with bounded prior-node excerpts (cli/interview.ts: buildSystemPrompt)
   → ChatSession.sendMessage() (cli/backends/index.ts)
       → Codex app-server OR OpenAI API (with seamless fallback)
       → LLM returns extracted nodes via tool call / structured output
@@ -45,7 +45,7 @@ user input
 
 ### Key modules
 
-**`cli/interview.ts`** — The core of the application. `runTurn()` owns one interview exchange. `buildSystemPrompt()` assembles context from retrieved nodes. `persistNodes()` calculates `depth` and `parentId` before insert.
+**`cli/interview.ts`** — The core of the application. `runTurn()` owns one interview exchange. `buildSystemPrompt()` retrieves up to 10 segment nodes (vector + FTS5) and formats them as truncated excerpts (tag, date, content preview) under a section char budget. `persistNodes()` calculates `depth` and `parentId` before insert.
 
 **`cli/backends/index.ts`** — `ChatSession` selects between Codex (subscription) and OpenAI API backends. Detects Codex login via `codex login status`. Maintains a shared transcript so mid-session backend fallback is transparent to the user. Fallback triggers when Codex hits a usage limit.
 

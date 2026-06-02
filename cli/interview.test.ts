@@ -7,9 +7,12 @@ import type { ExtractedNode } from "./backends/types.js";
 import {
   buildSystemPrompt,
   buildOpeningMessage,
+  formatContextBlock,
+  formatContextEntry,
   persistNodes,
   runTurn,
   SEGMENTS,
+  truncateText,
   type InterviewState,
 } from "./interview.js";
 import {
@@ -81,6 +84,64 @@ function makeState(): InterviewState {
   return { db, lastParentId: null, segment: "life_story" };
 }
 
+// --- context formatting helpers ---
+
+describe("truncateText", () => {
+  it("returns text unchanged when within limit", () => {
+    expect(truncateText("short", 10)).toBe("short");
+  });
+
+  it("appends ellipsis when over limit", () => {
+    expect(truncateText("abcdefghij", 7)).toBe("abcd...");
+  });
+});
+
+describe("formatContextEntry", () => {
+  it("formats tag, depth, and content", () => {
+    const line = formatContextEntry(makeNode(), 240);
+    expect(line).toBe('- depth 0 | "quiet joy" | the kitchen table');
+  });
+
+  it("includes memory date and granularity when present", () => {
+    const line = formatContextEntry(
+      makeNode({ memoryDate: "1987", memoryDateGranularity: "year" }),
+      240,
+    );
+    expect(line).toContain("1987 (year)");
+  });
+
+  it("truncates long content", () => {
+    const long = "x".repeat(300);
+    const line = formatContextEntry(makeNode({ content: long }), 50);
+    expect(line.endsWith("...")).toBe(true);
+    expect(line.length).toBeLessThan(long.length + 30);
+  });
+});
+
+describe("formatContextBlock", () => {
+  it("joins multiple entries", () => {
+    const block = formatContextBlock([
+      makeNode({ tag: "a", content: "one" }),
+      makeNode({ tag: "b", content: "two" }),
+    ]);
+    expect(block.split("\n")).toHaveLength(2);
+  });
+
+  it("shrinks content when section exceeds maxSectionChars", () => {
+    const nodes = Array.from({ length: 10 }, (_, i) =>
+      makeNode({
+        tag: `tag-${i}`,
+        content: "word ".repeat(80),
+      }),
+    );
+    const block = formatContextBlock(nodes, {
+      maxContentCharsPerNode: 240,
+      maxSectionChars: 500,
+    });
+    expect(block.length).toBeLessThanOrEqual(500);
+  });
+});
+
 // --- buildSystemPrompt ---
 
 describe("buildSystemPrompt", () => {
@@ -97,12 +158,35 @@ describe("buildSystemPrompt", () => {
 
   it("includes context block with last 10 nodes when db has 11 nodes", async () => {
     for (let i = 0; i < 11; i++) {
-      insertNode(db, makeNode({ id: `n${i}`, tag: `tag-${i}`, capturedAt: i }));
+      insertNode(
+        db,
+        makeNode({
+          id: `n${i}`,
+          tag: `tag-${i}`,
+          content: `content-${i}`,
+          capturedAt: i,
+        }),
+      );
     }
     const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
     expect(prompt).toContain("tag-10");
+    expect(prompt).toContain("content-10");
     expect(prompt).not.toContain("tag-0");
+    expect(prompt).not.toContain("content-0");
     expect((prompt.match(/depth \d/g) ?? []).length).toBe(10);
+  });
+
+  it("includes memory date in context when present", async () => {
+    insertNode(
+      db,
+      makeNode({
+        memoryDate: "1987",
+        memoryDateGranularity: "year",
+      }),
+    );
+    const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
+    expect(prompt).toContain("1987 (year)");
+    expect(prompt).toContain("the kitchen table");
   });
 
   it("prioritises search-matched nodes when recentInput is provided", async () => {
@@ -130,14 +214,14 @@ describe("buildSystemPrompt", () => {
     expect(await buildSystemPrompt(db, openai, "life_story")).not.toContain(
       "distant memory",
     );
-    expect(
-      await buildSystemPrompt(
-        db,
-        openai,
-        "life_story",
-        "I was with my grandmother",
-      ),
-    ).toContain("distant memory");
+    const withInput = await buildSystemPrompt(
+      db,
+      openai,
+      "life_story",
+      "I was with my grandmother",
+    );
+    expect(withInput).toContain("distant memory");
+    expect(withInput).toContain("grandmother in the garden");
   });
 
   it("works with a null client (no embeddings) — degrades to FTS5", async () => {
@@ -157,6 +241,15 @@ describe("buildSystemPrompt", () => {
       "grandmother",
     );
     expect(prompt).toContain("distant memory");
+    expect(prompt).toContain("grandmother in the garden");
+  });
+
+  it("uses updated context instruction wording", async () => {
+    insertNode(db, makeNode());
+    const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
+    expect(prompt).toContain(
+      "do not quote or enumerate this list back to the user",
+    );
   });
 
   it("uses pre-computed recentEmbedding and does not call embeddings.create", async () => {
