@@ -80,12 +80,21 @@ function normalizeContextText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** Normalize whitespace and strip pipe delimiters from untrusted context fields. */
+function sanitizeContextField(text: string): string {
+  return normalizeContextText(text).replace(/\|/g, "¦");
+}
+
+function quoteContextField(text: string): string {
+  return `"${sanitizeContextField(text).replace(/"/g, "'")}"`;
+}
+
 /** One plain-text context line for a captured node (no ANSI). */
 export function formatContextEntry(
   node: DumpNode,
   maxContentChars: number,
 ): string {
-  const memoryDate = node.memoryDate ? normalizeContextText(node.memoryDate) : "";
+  const memoryDate = node.memoryDate ? sanitizeContextField(node.memoryDate) : "";
   const datePart = memoryDate
     ? node.memoryDateGranularity
       ? `${memoryDate} (${node.memoryDateGranularity})`
@@ -93,9 +102,9 @@ export function formatContextEntry(
     : null;
   const parts = [
     `- depth ${node.depth}`,
-    `"${normalizeContextText(node.tag).replace(/"/g, "'")}"`,
+    quoteContextField(node.tag),
     ...(datePart ? [datePart] : []),
-    truncateText(normalizeContextText(node.content), maxContentChars),
+    truncateText(sanitizeContextField(node.content), maxContentChars),
   ];
   return parts.join(" | ");
 }

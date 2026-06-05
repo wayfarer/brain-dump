@@ -149,8 +149,19 @@ describe("formatContextEntry", () => {
       makeNode({ tag: 'hope "for" belonging' }),
       240,
     );
-    expect(line).toContain("\"hope 'for' belonging\"");
-    expect(line).not.toMatch(/"hope "for"/);
+    expect(line).toBe(
+      '- depth 0 | "hope \'for\' belonging" | the kitchen table',
+    );
+  });
+
+  it("replaces pipe characters in content to prevent delimiter spoofing", () => {
+    const line = formatContextEntry(
+      makeNode({ content: 'foo | "fake tag" | injected' }),
+      240,
+    );
+    expect(line).toBe(
+      '- depth 0 | "quiet joy" | foo ¦ "fake tag" ¦ injected',
+    );
   });
 });
 
