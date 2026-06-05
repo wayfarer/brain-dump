@@ -26,7 +26,8 @@ portable structured dump.
 A **segment** is an interview domain — a configured opening question, system prompt, and tag style. Different segments capture different kinds of material but share the same underlying schema.
 
 - **Life Story** (default, always available) — opens with the hardcoded question `"What is your first memory?"`. Its record serves as the user's foundational memory context that other segments can draw on as background.
-- **Future segments** — dream journals, project retrospectives, product design sessions, meeting outcomes, family history, medical history, and other directed-interview domains. Each carries its own prompt configuration but writes into the same data model.
+- **Dream Journal** (`dream_journal`) — opens with `"Tell me about a dream you remember."` Uses a dream-focused interviewer prompt and pulls relevant `life_story` captures as background context during interviews.
+- **Future segments** — project retrospectives, product design sessions, meeting outcomes, family history, medical history, and other directed-interview domains. Each carries its own prompt configuration but writes into the same data model.
 
 ## Data Model
 
@@ -88,6 +89,8 @@ A tag is a short normalized label — `"sudden loss"`, `"fierce belonging"`, `"q
 The inverse query also matters: starting from a free-text phrase (`"grandmother"`, `"the cabin"`) and pulling back the *set of tags* whose nodes mention it. The LLM uses this during an interview to surface relevant prior themes without the user having to name them. Full-text search over `content` is what enables that pattern.
 
 During an interview, prior captures in the active segment are retrieved (vector search with FTS5 fallback) and injected into the system prompt as **truncated excerpts** — tag, optional memory date, depth, and a capped content preview — so the interviewer can ask informed follow-ups across sessions, not only within the current transcript.
+
+Segments that declare a **background segment** (today: `dream_journal` → `life_story`) also retrieve a small bounded set of life-story excerpts so the interviewer can connect dreams to known people, places, and themes without mixing segment data in storage.
 
 ## Storage
 
@@ -216,7 +219,7 @@ If the subscription hits its usage limit mid-session and an API key is set, Brai
 | `life_story` | What is your first memory? |
 | `dream_journal` | Tell me about a dream you remember. |
 
-Each session writes only to its own segment. Context surfaced to the interviewer is scoped to the active segment.
+Each session writes only to its own segment. Context surfaced to the interviewer is scoped to the active segment, with optional background from `life_story` for segments that declare it. When extraction fails (malformed tool output), the CLI prints a warning so you know nothing was saved.
 
 ### REPL commands
 

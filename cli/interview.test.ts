@@ -5,6 +5,7 @@ import type OpenAI from "openai";
 import type { ChatSession } from "./backends/index.js";
 import type { ExtractedNode } from "./backends/types.js";
 import {
+  buildSegmentBasePrompt,
   buildSystemPrompt,
   buildOpeningMessage,
   formatContextBlock,
@@ -195,7 +196,66 @@ describe("buildSystemPrompt", () => {
   it("returns base prompt when db is empty", async () => {
     const prompt = await buildSystemPrompt(db, makeMockOpenAI(), "life_story");
     expect(prompt).toContain("warm, patient interviewer");
+    expect(prompt).toContain("memory archaeology");
     expect(prompt).not.toContain("Context from previous sessions");
+  });
+
+  it("uses segment-specific interviewer focus for dream_journal", () => {
+    const prompt = buildSegmentBasePrompt("dream_journal");
+    expect(prompt).toContain("dream journal session");
+    expect(prompt).not.toContain("memory archaeology");
+  });
+
+  it("injects life_story background when dream_journal is empty but life_story has nodes", async () => {
+    insertNode(
+      db,
+      makeNode({
+        id: "life-bg",
+        tag: "childhood home",
+        content: "the old house on maple street",
+        segment: "life_story",
+      }),
+    );
+    const prompt = await buildSystemPrompt(
+      db,
+      makeMockOpenAI(),
+      "dream_journal",
+    );
+    expect(prompt).toContain("Background from life story");
+    expect(prompt).toContain("childhood home");
+    expect(prompt).toContain("maple street");
+    expect(prompt).not.toContain("Context from previous sessions in this segment");
+    expect(prompt).toContain("dream journal session");
+  });
+
+  it("includes both segment context and life_story background for dream_journal", async () => {
+    insertNode(
+      db,
+      makeNode({
+        id: "dream-1",
+        tag: "flying dream",
+        content: "soaring over rooftops",
+        segment: "dream_journal",
+      }),
+    );
+    insertNode(
+      db,
+      makeNode({
+        id: "life-1",
+        tag: "grandmother",
+        content: "she baked bread every sunday",
+        segment: "life_story",
+      }),
+    );
+    const prompt = await buildSystemPrompt(
+      db,
+      makeMockOpenAI(),
+      "dream_journal",
+    );
+    expect(prompt).toContain("Context from previous sessions in this segment");
+    expect(prompt).toContain("flying dream");
+    expect(prompt).toContain("Background from life story");
+    expect(prompt).toContain("grandmother");
   });
 
   it("does not leak any extraction-mechanism wording (lives in backend tails now)", async () => {
@@ -330,6 +390,9 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("untrusted prior user content");
     expect(prompt).toContain(
       "do not quote or enumerate this list back to the user",
+    );
+    expect(prompt).toContain(
+      "Context from previous sessions in this segment",
     );
   });
 
@@ -498,6 +561,23 @@ describe("persistNodes", () => {
     ).not.toThrow();
     expect(getRecentNodes(db, 1)).toHaveLength(1);
   });
+
+  it("skips nodes with empty tag or content", () => {
+    const onNodeSaved = vi.fn();
+    const result = persistNodes(
+      db,
+      makeState(),
+      [
+        extracted({ tag: "", content: "orphan content" }),
+        extracted({ tag: "valid", content: "saved detail" }),
+      ],
+      null,
+      { onNodeSaved },
+    );
+    expect(result).toEqual({ saved: 1, skippedInvalid: 1 });
+    expect(getRecentNodes(db, 1)[0].tag).toBe("valid");
+    expect(onNodeSaved).toHaveBeenCalledTimes(1);
+  });
 });
 
 // --- runTurn presentation bridge ---
@@ -536,5 +616,35 @@ describe("runTurn", () => {
 
     expect(stdoutSpy).toHaveBeenCalledWith("Tell me more.");
     expect(stdoutSpy).toHaveBeenCalledWith("\n");
+  });
+
+  it("fires onNodeError when extraction fails", async () => {
+    const onNodeError = vi.fn();
+    const session = {
+      turn: vi.fn(async () => ({
+        question: "What happened next?",
+        nodes: [],
+        extractionFailed: true,
+      })),
+    } as unknown as ChatSession;
+
+    await runTurn(session, null, makeState(), "hello", { onNodeError });
+
+    expect(onNodeError).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires onNodeError when persistNodes skips invalid nodes", async () => {
+    const onNodeError = vi.fn();
+    const session = {
+      turn: vi.fn(async () => ({
+        question: "What happened next?",
+        nodes: [extracted({ tag: "", content: "missing tag" })],
+      })),
+    } as unknown as ChatSession;
+
+    await runTurn(session, null, makeState(), "hello", { onNodeError });
+
+    expect(onNodeError).toHaveBeenCalledTimes(1);
+    expect(getRecentNodes(db, 1)).toHaveLength(0);
   });
 });

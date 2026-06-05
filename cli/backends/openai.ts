@@ -120,6 +120,7 @@ export class OpenAIBackend implements ChatBackend {
     }
 
     const nodes: ExtractedNode[] = [];
+    let parseFailures = 0;
     for (const tc of toolCalls.filter(Boolean)) {
       let args: {
         tag?: string;
@@ -131,9 +132,13 @@ export class OpenAIBackend implements ChatBackend {
       try {
         args = JSON.parse(tc.arguments) as typeof args;
       } catch {
-        continue; // skip malformed tool call
+        parseFailures++;
+        continue;
       }
-      if (!args.tag || !args.content) continue;
+      if (!args.tag || !args.content) {
+        parseFailures++;
+        continue;
+      }
       nodes.push({
         tag: args.tag,
         content: args.content,
@@ -143,7 +148,11 @@ export class OpenAIBackend implements ChatBackend {
       });
     }
 
-    return { question: fullContent, nodes };
+    return {
+      question: fullContent,
+      nodes,
+      extractionFailed: parseFailures > 0 && nodes.length === 0,
+    };
   }
 
   close(): void {

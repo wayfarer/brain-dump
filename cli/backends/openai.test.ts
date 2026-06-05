@@ -149,6 +149,7 @@ describe("OpenAIBackend.runTurn", () => {
       input({ events: { onFirstText, onText } }),
     );
     expect(result.nodes).toEqual([]);
+    expect(result.extractionFailed).toBe(true);
     expect(onFirstText).not.toHaveBeenCalled();
     expect(onText).not.toHaveBeenCalled();
   });

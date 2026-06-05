@@ -21,6 +21,8 @@ export interface TurnResult {
   question: string;
   /** Zero or more memories to persist (Codex yields 0–1; OpenAI may yield more). */
   nodes: ExtractedNode[];
+  /** Tool output was present but could not be parsed into a valid node. */
+  extractionFailed?: boolean;
 }
 
 /** One entry of the provider-agnostic conversation transcript. */
