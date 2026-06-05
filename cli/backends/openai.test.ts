@@ -154,6 +154,24 @@ describe("OpenAIBackend.runTurn", () => {
     expect(onText).not.toHaveBeenCalled();
   });
 
+  it("skips tool-call JSON with an invalid argument shape", async () => {
+    const invalidArgs = [
+      "null",
+      JSON.stringify([]),
+      JSON.stringify({ tag: [], content: "I saw the dog" }),
+      JSON.stringify({ tag: "sudden loss", content: false }),
+    ];
+
+    for (const args of invalidArgs) {
+      const { backend } = makeBackend([
+        toolCallChunk(0, "bad-shape", "extract_memory_node", args),
+      ]);
+      const result = await backend.runTurn(input());
+      expect(result.nodes).toEqual([]);
+      expect(result.extractionFailed).toBe(true);
+    }
+  });
+
   it("surfaces two simultaneous tool calls", async () => {
     const a = JSON.stringify({
       tag: "quiet joy",

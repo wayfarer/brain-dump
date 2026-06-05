@@ -62,6 +62,10 @@ const EXTRACT_NODE_TOOL: OpenAI.ChatCompletionTool = {
   },
 };
 
+function isToolArgs(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export class OpenAIBackend implements ChatBackend {
   readonly name = "openai" as const;
 
@@ -122,29 +126,33 @@ export class OpenAIBackend implements ChatBackend {
     const nodes: ExtractedNode[] = [];
     let parseFailures = 0;
     for (const tc of toolCalls.filter(Boolean)) {
-      let args: {
-        tag?: string;
-        content?: string;
-        parentId?: string;
-        memoryDate?: string;
-        memoryDateGranularity?: string;
-      };
+      let args: unknown;
       try {
-        args = JSON.parse(tc.arguments) as typeof args;
+        args = JSON.parse(tc.arguments) as unknown;
       } catch {
         parseFailures++;
         continue;
       }
-      if (!args.tag || !args.content) {
+      if (
+        !isToolArgs(args) ||
+        typeof args.tag !== "string" ||
+        typeof args.content !== "string" ||
+        !args.tag.trim() ||
+        !args.content.trim()
+      ) {
         parseFailures++;
         continue;
       }
       nodes.push({
         tag: args.tag,
         content: args.content,
-        parentId: args.parentId ?? "",
-        memoryDate: args.memoryDate,
-        memoryDateGranularity: args.memoryDateGranularity,
+        parentId: typeof args.parentId === "string" ? args.parentId : "",
+        memoryDate:
+          typeof args.memoryDate === "string" ? args.memoryDate : undefined,
+        memoryDateGranularity:
+          typeof args.memoryDateGranularity === "string"
+            ? args.memoryDateGranularity
+            : undefined,
       });
     }
 

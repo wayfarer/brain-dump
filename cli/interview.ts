@@ -117,9 +117,14 @@ export function formatContextEntry(
   maxContentChars: number,
 ): string {
   const memoryDate = node.memoryDate ? sanitizeContextField(node.memoryDate) : "";
-  const datePart = memoryDate
+  const memoryDateGranularity = VALID_GRANULARITIES.has(
+    node.memoryDateGranularity ?? "",
+  )
     ? node.memoryDateGranularity
-      ? `${memoryDate} (${node.memoryDateGranularity})`
+    : null;
+  const datePart = memoryDate
+    ? memoryDateGranularity
+      ? `${memoryDate} (${memoryDateGranularity})`
       : memoryDate
     : null;
   const parts = [
@@ -308,21 +313,35 @@ export function persistNodes(
   let skippedInvalid = 0;
 
   for (const n of nodes) {
-    if (!n.tag?.trim() || !n.content?.trim()) {
+    if (
+      typeof n !== "object" ||
+      n === null ||
+      typeof n.tag !== "string" ||
+      typeof n.content !== "string" ||
+      !n.tag.trim() ||
+      !n.content.trim()
+    ) {
       skippedInvalid++;
       continue;
     }
 
-    const explicitParent = n.parentId ? getNodeById(db, n.parentId) : null;
+    const parentId = typeof n.parentId === "string" ? n.parentId : "";
+    const memoryDate =
+      typeof n.memoryDate === "string" && n.memoryDate ? n.memoryDate : null;
+    const memoryDateGranularity =
+      typeof n.memoryDateGranularity === "string"
+        ? n.memoryDateGranularity
+        : null;
+
+    const explicitParent = parentId ? getNodeById(db, parentId) : null;
     const fallbackParent =
       !explicitParent && state.lastParentId
         ? getNodeById(db, state.lastParentId)
         : null;
     const parentNode = explicitParent ?? fallbackParent;
     const granularity =
-      n.memoryDateGranularity &&
-      VALID_GRANULARITIES.has(n.memoryDateGranularity)
-        ? (n.memoryDateGranularity as MemoryDateGranularity)
+      memoryDateGranularity && VALID_GRANULARITIES.has(memoryDateGranularity)
+        ? (memoryDateGranularity as MemoryDateGranularity)
         : null;
     const node: DumpNode = {
       id: randomUUID(),
@@ -330,7 +349,7 @@ export function persistNodes(
       content: n.content,
       parentId: parentNode?.id ?? null,
       capturedAt: Date.now(),
-      memoryDate: n.memoryDate || null,
+      memoryDate,
       memoryDateGranularity: granularity,
       segment: state.segment,
       depth: parentNode ? parentNode.depth + 1 : 0,
